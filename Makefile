@@ -3,20 +3,39 @@ CFLAGS  ?= -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror
 CFLAGS  += -Iinclude
 
 BUILD   := build
+PORT    := ports/stm32f446re_sx1276
+MOCKS   := tests/mocks
+TESTFLAGS := -Wno-conversion -fsanitize=address,undefined -g
+
+CORE_SRC := src/fhss.c
+PORT_SRC := $(PORT)/sx1276.c $(PORT)/fhss_link.c
+EMU_SRC  := $(MOCKS)/sx1276_emu.c
 
 .PHONY: all test clean
 
 all: test
 
-$(BUILD)/test_fhss: src/fhss.c tests/test_fhss.c include/fhss.h | $(BUILD)
-	$(CC) $(CFLAGS) -Wno-conversion -fsanitize=address,undefined -g \
-		src/fhss.c tests/test_fhss.c -o $@
+$(BUILD)/fhss.o: $(CORE_SRC) include/fhss.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $(CORE_SRC) -o $@
 
-$(BUILD)/fhss.o: src/fhss.c include/fhss.h | $(BUILD)
-	$(CC) $(CFLAGS) -c src/fhss.c -o $@
+# Port sources under the strict flags, against the mock HAL header.
+$(BUILD)/port.stamp: $(PORT_SRC) $(PORT)/*.h $(MOCKS)/stm32f4xx_hal.h | $(BUILD)
+	for f in $(PORT_SRC); do \
+		$(CC) $(CFLAGS) -I$(PORT) -I$(MOCKS) -fsyntax-only $$f || exit 1; \
+	done
+	touch $@
 
-test: $(BUILD)/fhss.o $(BUILD)/test_fhss
+$(BUILD)/test_fhss: $(CORE_SRC) tests/test_fhss.c include/fhss.h | $(BUILD)
+	$(CC) $(CFLAGS) $(TESTFLAGS) $(CORE_SRC) tests/test_fhss.c -o $@
+
+$(BUILD)/test_port: $(CORE_SRC) $(PORT_SRC) $(EMU_SRC) tests/test_port_sx1276.c \
+		$(PORT)/*.h $(MOCKS)/*.h | $(BUILD)
+	$(CC) $(CFLAGS) $(TESTFLAGS) -I$(PORT) -I$(MOCKS) \
+		$(CORE_SRC) $(PORT_SRC) $(EMU_SRC) tests/test_port_sx1276.c -o $@
+
+test: $(BUILD)/fhss.o $(BUILD)/port.stamp $(BUILD)/test_fhss $(BUILD)/test_port
 	./$(BUILD)/test_fhss
+	./$(BUILD)/test_port
 
 $(BUILD):
 	mkdir -p $@

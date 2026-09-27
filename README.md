@@ -20,7 +20,11 @@ These come from FCC 47 CFR 15.247(a)(1)(i). Have the team's RF lead check this a
 - **Followers.** A follower starts **searching**: it parks on the first channel of the sequence and listens. The leader lands on that channel once per cycle, so a follower locks within about 20 s. Once locked, it adjusts its clock on every packet it receives. After `max_missed_hops` dwells with no packet, it goes back to searching.
 - **Transmit rules.** `fhss_can_transmit()` returns false while a node is searching, because transmitting while parked on one channel would break the dwell limit. It also returns false within `guard_ms` of a hop, so no packet straddles a channel change.
 
-## Porting
+## Ports
+
+- **NUCLEO-F446RE + SX1276/RFM95W**: [`ports/stm32f446re_sx1276`](ports/stm32f446re_sx1276/README.md) covers wiring, CubeMX setup and a ready-to-paste `main.c`.
+
+## Porting to other hardware
 
 See `examples/port_template.c`. You provide two things:
 
