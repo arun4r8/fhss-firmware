@@ -3,13 +3,13 @@ CFLAGS  ?= -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror
 CFLAGS  += -Iinclude
 
 BUILD   := build
-PORT    := ports/stm32f446re_sx1276
+PORT    := ports/nucleo_sx1262
 MOCKS   := tests/mocks
 TESTFLAGS := -Wno-conversion -fsanitize=address,undefined -g
 
 CORE_SRC := src/fhss.c
-PORT_SRC := $(PORT)/sx1276.c $(PORT)/fhss_link.c
-EMU_SRC  := $(MOCKS)/sx1276_emu.c
+PORT_SRC := $(PORT)/sx1262.c $(PORT)/fhss_link.c
+EMU_SRC  := $(MOCKS)/sx1262_emu.c
 
 .PHONY: all test clean
 
@@ -28,10 +28,10 @@ $(BUILD)/port.stamp: $(PORT_SRC) $(PORT)/*.h $(MOCKS)/stm32f4xx_hal.h | $(BUILD)
 $(BUILD)/test_fhss: $(CORE_SRC) tests/test_fhss.c include/fhss.h | $(BUILD)
 	$(CC) $(CFLAGS) $(TESTFLAGS) $(CORE_SRC) tests/test_fhss.c -o $@
 
-$(BUILD)/test_port: $(CORE_SRC) $(PORT_SRC) $(EMU_SRC) tests/test_port_sx1276.c \
+$(BUILD)/test_port: $(CORE_SRC) $(PORT_SRC) $(EMU_SRC) tests/test_port_sx1262.c \
 		$(PORT)/*.h $(MOCKS)/*.h | $(BUILD)
 	$(CC) $(CFLAGS) $(TESTFLAGS) -I$(PORT) -I$(MOCKS) \
-		$(CORE_SRC) $(PORT_SRC) $(EMU_SRC) tests/test_port_sx1276.c -o $@
+		$(CORE_SRC) $(PORT_SRC) $(EMU_SRC) tests/test_port_sx1262.c -o $@
 
 test: $(BUILD)/fhss.o $(BUILD)/port.stamp $(BUILD)/test_fhss $(BUILD)/test_port
 	./$(BUILD)/test_fhss

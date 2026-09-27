@@ -1,5 +1,5 @@
 /*
- * fhss_link.h - Frequency-hopping packet link: fhss core + SX1276 radio.
+ * fhss_link.h - Frequency-hopping packet link: fhss core + SX1262 radio.
  *
  * Each 400 ms dwell is split in two halves:
  *   first half   leader transmits (always at least one beacon per dwell)
@@ -15,7 +15,7 @@
 #include <stdint.h>
 
 #include "fhss.h"
-#include "sx1276.h"
+#include "sx1262.h"
 
 #define FHSS_LINK_MAX_PAYLOAD 24
 #define FHSS_LINK_QUEUE_LEN   8
@@ -29,11 +29,16 @@ typedef struct {
     uint16_t nss_pin;
     GPIO_TypeDef *rst_port;
     uint16_t rst_pin;
+    GPIO_TypeDef *busy_port;
+    uint16_t busy_pin;
+    GPIO_TypeDef *ant_pwr_port; /* shield antenna-switch supply (D8), or NULL */
+    uint16_t ant_pwr_pin;
+    bool use_tcxo;              /* crystal shields: false; TCXO (*DAS) shields: true */
 
     bool leader;         /* exactly one leader per network */
     uint32_t seed;       /* hop sequence seed, same on every node */
     uint8_t net_id;      /* drops packets from other networks on our channels */
-    int8_t tx_power_dbm; /* 2..17 */
+    int8_t tx_power_dbm; /* -9..22 */
 
     fhss_link_rx_cb on_rx;
     void *user;
@@ -50,7 +55,7 @@ typedef struct {
 
 typedef struct {
     fhss_link_config_t cfg;
-    sx1276_t radio;
+    sx1262_t radio;
     fhss_t fhss;
     uint16_t max_airtime_ms;
     uint16_t last_hop_index;
@@ -62,6 +67,7 @@ typedef struct {
     uint8_t q_head;
     uint8_t q_count;
     fhss_link_stats_t stats;
+    sx1262_err_t radio_err; /* why init failed, if it did */
 } fhss_link_t;
 
 typedef enum {

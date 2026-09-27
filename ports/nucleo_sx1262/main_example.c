@@ -1,6 +1,6 @@
 /*
- * main_example.c - what to add to a CubeMX-generated main.c on the
- * NUCLEO-F446RE. Copy each block into the matching USER CODE section;
+ * main_example.c - what to add to a CubeMX-generated main.c on a Nucleo-64
+ * (e.g. NUCLEO-F446RE) with the Semtech SX1262MB2xAS shield on top. Copy each block into the matching USER CODE section;
  * this file is not built on its own.
  *
  * Demo: each node sends "L<n>" (leader) or "F<n>" (follower) once a
@@ -50,17 +50,23 @@ int main(void)
     /* USER CODE BEGIN 2 */
     fhss_link_config_t cfg = {
         .spi = &hspi1,
-        .nss_port = RFM_NSS_GPIO_Port, .nss_pin = RFM_NSS_Pin, /* D10 / PB6 */
-        .rst_port = RFM_RST_GPIO_Port, .rst_pin = RFM_RST_Pin, /* D9  / PC7 */
+        .nss_port = RADIO_NSS_GPIO_Port, .nss_pin = RADIO_NSS_Pin,     /* D7 / PA8 */
+        .rst_port = RADIO_RST_GPIO_Port, .rst_pin = RADIO_RST_Pin,     /* A0 / PA0 */
+        .busy_port = RADIO_BUSY_GPIO_Port, .busy_pin = RADIO_BUSY_Pin, /* D3 / PB3 */
+        .ant_pwr_port = RADIO_ANT_GPIO_Port, .ant_pwr_pin = RADIO_ANT_Pin, /* D8 / PA9 */
+        .use_tcxo = false, /* true only if the shield sticker says ...DAS (TCXO) */
         .leader = NODE_IS_LEADER,
         .seed = FHSS_SEED,
         .net_id = FHSS_NET_ID,
-        .tx_power_dbm = 5, /* keep low on the bench; max 17 */
+        .tx_power_dbm = 5, /* keep low on the bench; range -9..22 */
         .on_rx = on_rx,
         .user = NULL,
     };
     if (fhss_link_init(&link, &cfg) != FHSS_LINK_OK) {
-        uart_print("radio not found: check wiring, 3.3 V and SPI settings\r\n");
+        char err[96];
+        snprintf(err, sizeof(err), "radio init failed: %d (see ports/nucleo_sx1262/README.md)\r\n",
+                 (int)link.radio_err);
+        uart_print(err);
         Error_Handler();
     }
     uart_print(NODE_IS_LEADER ? "fhss leader up\r\n" : "fhss follower up, searching\r\n");

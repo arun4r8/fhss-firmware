@@ -22,7 +22,7 @@ These come from FCC 47 CFR 15.247(a)(1)(i). Have the team's RF lead check this a
 
 ## Ports
 
-- **NUCLEO-F446RE + SX1276/RFM95W**: [`ports/stm32f446re_sx1276`](ports/stm32f446re_sx1276/README.md) covers wiring, CubeMX setup and a ready-to-paste `main.c`.
+- **Nucleo-64 + Semtech SX1262MB2xAS shield**: [`ports/nucleo_sx1262`](ports/nucleo_sx1262/README.md) covers pins, CubeMX setup, init error codes and a ready-to-paste `main.c`.
 
 ## Porting to other hardware
 
