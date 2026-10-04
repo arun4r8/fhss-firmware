@@ -69,6 +69,9 @@ The STM32WL55 has no CAN controller, so the HW-184 board's **MCP2515** provides 
 
 ### 1. Modify the HW-184
 
+**No-solder bench option (for now):** snip only the TJA1050's **pin 4 (RXD)** with flush cutters, which stops it driving the MCP2515's receive line. Then attach jumper wires to **MCP2515 pins 1 (TXCAN) and 2 (RXCAN)** with micro-grabber clips, and run them to the Adafruit board's TX and RX. Check with a multimeter that the clips don't short the two pins together. Replace the clips with soldered wires once the setup is proven. The full steps below are the permanent version.
+
+
 1. **Find the TJA1050:** the only 8-pin chip on the board (the 18-pin one is the MCP2515). Pin 1 is marked by a dot or notch.
 2. **Check the connections before removing anything.** With a multimeter on continuity:
    - TJA1050 pin 1 (TXD) should beep to MCP2515 pin 1 (TXCAN).
