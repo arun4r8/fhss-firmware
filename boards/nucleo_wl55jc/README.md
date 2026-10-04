@@ -137,5 +137,30 @@ It doesn't touch the transceiver or the bus. Testing those needs a second CAN no
 
 ## Status
 
-- **Verified on the laptop:** it cross-compiles with warnings treated as errors. CI builds it on every push. The vector table and memory layout have been checked in the binary. The driver logic is covered by the emulated-SX1262 tests (`make test` at the repo root).
-- **Not yet run on hardware.** The register-level setup (clocks, SPI1, LPUART1, GPIO) follows ST's reference manual and headers, but this is its first time on a real board.
+**First hardware run: 2026-10-04, all checks passed.** NUCLEO-WL55JC2 + SX1262MB2xAS shield (crystal / CAS version) + HW-184 MCP2515 wired per this README:
+
+```
+=== FHSS self-test: NUCLEO-WL55JC + SX1262 shield ===
+  PASS  radio init (clock: crystal)
+        PLL locked on 50 / 50 channels
+  PASS  PLL lock
+  INFO  noise floor dBm: min -114, avg -111, max -109
+        TX 30 B, expected 72 ms, measured: 75 74 74 74 74
+  PASS  TX timing
+  PASS  device errors
+  PASS  CAN controller loopback (MCP2515)
+
+RESULT: all checks passed
+
+Hopping as leader (0 dBm, beacon every dwell). One line per 20 s cycle:
+  cycle 1: dwell 400-400 ms, beacons sent 50, tx errors 0
+  cycle 2: dwell 400-400 ms, beacons sent 100, tx errors 0
+  ...
+```
+
+Measured send time is 2–3 ms longer than the calculated airtime. That's SPI and polling overhead at the 4 MHz system clock, within the link's 5 ms retune margin.
+
+**Not yet verified on hardware:**
+- **Over-the-air reception and leader/follower sync:** needs a second radio setup.
+- **The hop pattern on a spectrum analyzer or SDR.**
+- **The CAN transceiver and bus:** the loopback check stays inside the MCP2515, so this needs a second CAN node.
