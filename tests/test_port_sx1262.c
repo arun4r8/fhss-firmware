@@ -366,6 +366,55 @@ static void test_link_end_to_end(void)
     NO_VIOLATIONS(&eb);
 }
 
+
+static void test_link_max_payload(void)
+{
+    printf("max-size payloads (31 B) back to back: every packet inside one dwell\n");
+    emu_reset_world();
+    static sx1262_emu_t ea, eb;
+    static fhss_link_t lead, fol;
+    static rx_sink_t lead_rx, fol_rx;
+    memset(&lead_rx, 0, sizeof(lead_rx));
+    memset(&fol_rx, 0, sizeof(fol_rx));
+    emu_add_radio(&ea, 0);
+    emu_add_radio(&eb, 1);
+    fhss_link_config_t lc = link_cfg(&ea, true, &lead_rx), fc = link_cfg(&eb, false, &fol_rx);
+    fhss_link_init(&lead, &lc);
+    fhss_link_init(&fol, &fc);
+
+    uint8_t big[FHSS_LINK_MAX_PAYLOAD];
+    memset(big, 0x5A, sizeof(big));
+    uint32_t t_lock = 0;
+    while (emu_now_ms < 90000) {
+        if (fhss_link_locked(&fol) && !t_lock) {
+            t_lock = emu_now_ms;
+        }
+        /* keep both queues topped up */
+        if (lead.q_count < FHSS_LINK_QUEUE_LEN) fhss_link_send(&lead, big, sizeof(big));
+        if (t_lock && fol.q_count < FHSS_LINK_QUEUE_LEN) fhss_link_send(&fol, big, sizeof(big));
+        fhss_link_poll(&lead);
+        fhss_link_poll(&fol);
+        emu_now_ms++;
+    }
+    int straddle = 0, wrong = 0;
+    for (int i = 0; i < emu_tx_log_n; i++) {
+        const emu_tx_event_t *t = &emu_tx_log[i];
+        for (int k = 0; k < ea.freq_log_n; k++) {
+            if (ea.freq_log[k].t_ms > t->start_ms && ea.freq_log[k].t_ms < t->end_ms) straddle++;
+        }
+        wrong += t->rf_freq != freq_at(&ea, t->start_ms);
+    }
+    uint32_t locked_s = (90000 - t_lock) / 1000;
+    printf("  %d packets on air, leader->follower %d, follower->leader %d over %u s locked\n",
+           emu_tx_log_n, fol_rx.received, lead_rx.received, locked_s);
+    CHECK(t_lock && straddle == 0 && wrong == 0, "straddle %d, wrong channel %d", straddle, wrong);
+    /* 2 full packets per node per dwell = 5 per second each way */
+    CHECK(fol_rx.received >= (int)(locked_s * 5) - 5, "leader->follower only %d", fol_rx.received);
+    CHECK(lead_rx.received >= (int)(locked_s * 5) - 5, "follower->leader only %d", lead_rx.received);
+    NO_VIOLATIONS(&ea);
+    NO_VIOLATIONS(&eb);
+}
+
 static void test_foreign_network_ignored(void)
 {
     printf("packets with another net_id are ignored\n");
@@ -398,6 +447,7 @@ int main(void)
     test_send_receive_and_retune();
     test_bringup_checks();
     test_link_end_to_end();
+    test_link_max_payload();
     test_foreign_network_ignored();
 
     printf("\n%d checks, %d failures\n", checks, failures);

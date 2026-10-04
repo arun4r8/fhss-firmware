@@ -1,6 +1,7 @@
 /*
  * Host-side stand-in for the STM32 HAL. SPI traffic is routed to an
- * emulated SX1262 (tests/mocks/sx1262_emu.c); HAL_GetTick() is virtual time.
+ * emulated chip (sx1262_emu.c or mcp2515_emu.c, one per test binary);
+ * HAL_GetTick() is virtual time.
  */
 #ifndef MOCK_HAL_H
 #define MOCK_HAL_H
@@ -10,14 +11,13 @@
 typedef enum { HAL_OK = 0, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 typedef enum { GPIO_PIN_RESET = 0, GPIO_PIN_SET } GPIO_PinState;
 
-struct sx1262_emu;
-
+/* emu points at whichever emulated chip sits behind this bus or port */
 typedef struct {
-    struct sx1262_emu *emu;
+    void *emu;
 } SPI_HandleTypeDef;
 
 typedef struct {
-    struct sx1262_emu *emu;
+    void *emu;
 } GPIO_TypeDef;
 
 #define GPIO_PIN_NSS 0x0001u

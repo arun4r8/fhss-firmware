@@ -7,6 +7,8 @@
  *   3. Noise floor    RSSI on every channel while listening (info)
  *   4. TX timing      5 packets on different channels; TxDone vs. airtime
  *   5. Device errors  none latched after the tests
+ *   6. CAN loopback   MCP2515 answers on SPI and loops a frame back
+ *                     (checks the controller only; the bus needs a 2nd node)
  * Then runs the hopping link as leader forever, printing one line per
  * 20 s cycle with the measured dwell times.
  *
@@ -14,9 +16,17 @@
  *       blue toggles on every hop.
  * Transmit power is kept at 0 dBm for bench use.
  */
+#include <string.h>
+
 #include "board.h"
 #include "fhss_link.h"
+#include "mcp2515.h"
 #include "sx1262.h"
+
+/* CAN settings to confirm: the crystal printed on the HW-184's "OSC" can,
+ * and the bus bit rate from the embedded team. */
+#define CAN_OSC_HZ    8000000u
+#define CAN_BITRATE   500000u
 
 #define TX_DBM        0
 #define BASE_HZ       902200000u
@@ -43,6 +53,8 @@ static void check(const char *name, int ok)
     uart_puts("\n");
     failures += !ok;
 }
+
+static void check_can(void);
 
 static const char *init_hint(int err)
 {
@@ -144,7 +156,36 @@ static int run_checks(sx1262_t *r)
         uart_puts("\n");
     }
     check("device errors", errs == 0 && !r->busy_timeout);
+
+    check_can();
     return 1;
+}
+
+static void check_can(void)
+{
+    mcp2515_t can = {
+        .spi = &board_spi1, .cs_port = CAN_CS_PORT, .cs_pin = CAN_CS_PIN,
+        .osc_hz = CAN_OSC_HZ, .bitrate = CAN_BITRATE, .mode = MCP2515_MODE_LOOPBACK,
+    };
+    int err = mcp2515_init(&can);
+    if (err != MCP2515_OK) {
+        uart_puts("  FAIL  CAN controller init, error ");
+        uart_put_int(err);
+        uart_puts(err == MCP2515_ERR_NOT_FOUND
+                      ? ": no SPI reply from MCP2515 (CS on PA8? VCC 3.3 V? SCK/SI/SO wired?)\n"
+                      : "\n");
+        failures++;
+        return;
+    }
+    can_frame_t rx, tx = {.id = 0x5A3, .dlc = 8, .data = {0xDE, 0xAD, 0xBE, 0xEF, 1, 2, 3, 4}};
+    int ok = mcp2515_send(&can, &tx) == MCP2515_OK;
+    uint32_t t0 = HAL_GetTick();
+    int got = 0;
+    while (ok && !got && HAL_GetTick() - t0 < 20) {
+        got = mcp2515_receive(&can, &rx);
+    }
+    ok = ok && got && rx.id == tx.id && rx.dlc == 8 && memcmp(rx.data, tx.data, 8) == 0;
+    check("CAN controller loopback (MCP2515)", ok);
 }
 
 static void run_leader(void)

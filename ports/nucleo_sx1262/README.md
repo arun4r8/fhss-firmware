@@ -64,8 +64,8 @@ SX1262 shields come in a crystal version (sticker ending **CAS**) and a TCXO ver
 | Channels | 50, 902.2–926.7 MHz, 500 kHz apart |
 | Modulation | LoRa SF7, 125 kHz, CR 4/5, CRC on, sync word 0x12 |
 | Dwell | 400 ms. Leader transmits in the first half, followers in the second |
-| Max payload | 24 bytes (≈ 72 ms airtime with the 6-byte header) |
-| Throughput | About 2 full packets per node per dwell (≈ 120 B/s each way) |
+| Max payload | 31 bytes: one 10-sensor hub message in the embedded team's format (≈ 83 ms airtime with the 6-byte header) |
+| Throughput | About 2 full packets per node per dwell (≈ 155 B/s each way) |
 | Acquisition | ≤ 20.4 s. The follower parks on one channel until the leader passes through it |
 | Lock loss | 3 dwells with no leader packet, then it searches again |
 

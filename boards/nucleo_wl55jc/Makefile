@@ -17,12 +17,13 @@ CFLAGS := -mcpu=cortex-m4 -mthumb -mfloat-abi=soft -Os -g -std=c99 \
           -Wall -Wextra -Werror -ffreestanding -ffunction-sections -fdata-sections \
           -fno-tree-loop-distribute-patterns \
           -DCORE_CM4 -DSTM32WL55xx -DFHSS_HAL_HEADER='"hal_shim.h"' \
-          -I. -Ilibc -I$(ROOT)/include -I$(ROOT)/ports/nucleo_sx1262 \
+          -I. -Ilibc -I$(ROOT)/include -I$(ROOT)/ports/nucleo_sx1262 -I$(ROOT)/drivers/mcp2515 \
           -I$(ROOT)/third_party/cmsis_core -I$(ROOT)/third_party/cmsis_device_wl
 LDFLAGS := -T stm32wl55jc_cm4.ld -nostdlib -Wl,--gc-sections -Wl,-Map=$(BUILD)/selftest.map
 
 SRCS := startup.c board.c hal_shim.c libc_min.c selftest.c \
-        $(ROOT)/src/fhss.c $(ROOT)/ports/nucleo_sx1262/sx1262.c $(ROOT)/ports/nucleo_sx1262/fhss_link.c
+        $(ROOT)/src/fhss.c $(ROOT)/ports/nucleo_sx1262/sx1262.c $(ROOT)/ports/nucleo_sx1262/fhss_link.c \
+        $(ROOT)/drivers/mcp2515/mcp2515.c
 
 .PHONY: all flash monitor clean
 

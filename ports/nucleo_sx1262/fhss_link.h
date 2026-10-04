@@ -17,7 +17,7 @@
 #include "fhss.h"
 #include "sx1262.h"
 
-#define FHSS_LINK_MAX_PAYLOAD 24
+#define FHSS_LINK_MAX_PAYLOAD 31 /* one 10-sensor hub message (can_msg.h) */
 #define FHSS_LINK_QUEUE_LEN   8
 #define FHSS_LINK_HEADER_LEN  (2 + FHSS_SYNC_WIRE_SIZE)
 

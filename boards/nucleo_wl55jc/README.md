@@ -27,7 +27,7 @@ You only need the ARM compiler, with no STM32CubeIDE or ST account:
 ```sh
 brew install arm-none-eabi-gcc arm-none-eabi-binutils
 cd boards/nucleo_wl55jc
-make            # builds build/selftest.bin (~8 KB)
+make            # builds build/selftest.bin (~9 KB)
 make flash      # copies it onto the Nucleo's USB drive (/Volumes/NOD_...)
 make monitor    # serial console at 115200 (quit: Ctrl-A, then K, then y)
 ```
@@ -43,6 +43,7 @@ Flashing is drag-and-drop: the Nucleo appears as a USB drive, and copying the `.
 | Noise floor | The receiver is on and reporting RSSI on each channel (informational) | That packets decode |
 | TX timing | The modem sends a full 30-byte packet and reports done after the expected airtime (~72 ms ± 4) | That anything was heard over the air |
 | Device errors | Nothing latched in the chip's error register afterwards | |
+| CAN loopback | The MCP2515 answers on SPI and loops a frame back internally | The transceiver or the CAN bus (needs a second node) |
 
 After the checks, it runs the real hopping link as the **leader** at 0 dBm, with a beacon every 400 ms dwell. It prints one line per 20 s cycle with the measured dwell range, which should be 400 ms (±1 ms), plus beacon and error counts. To confirm hops over the air, watch 902–928 MHz on a spectrum analyzer or SDR receiver.
 
@@ -61,6 +62,58 @@ The firmware retries every 3 s, so you can reseat the shield without reflashing.
 | -8 `BUSY` | BUSY never went low: check D3 (PB3), and that RESET on A0 (PB1) isn't held low |
 | -6 `OSC` | Oscillator didn't start as either crystal or TCXO: shield fault |
 | -7 `CALIB` | Calibration failed: check the 3.3 V supply |
+
+## CAN hardware: HW-184 (MCP2515) + Adafruit TJA1051T/3
+
+The STM32WL55 has no CAN controller, so the HW-184 board's **MCP2515** provides one over SPI. Its own **TJA1050** transceiver needs 5 V, which doesn't mix with the WL55's 3.3 V logic. So we remove it and use the **Adafruit TJA1051T/3** breakout instead. That board takes 3.3 V logic and makes its own 5 V for the bus.
+
+### 1. Modify the HW-184
+
+1. **Find the TJA1050:** the only 8-pin chip on the board (the 18-pin one is the MCP2515). Pin 1 is marked by a dot or notch.
+2. **Check the connections before removing anything.** With a multimeter on continuity:
+   - TJA1050 pin 1 (TXD) should beep to MCP2515 pin 1 (TXCAN).
+   - TJA1050 pin 4 (RXD) should beep to MCP2515 pin 2 (RXCAN).
+   - If not, stop and send a photo; this board revision is wired differently.
+3. **Remove the TJA1050.** Use hot air, or cut its legs flush with the body and then desolder the stubs one at a time. Don't lift the pads.
+4. **Solder two wires to the empty pads:**
+   - Pad 1 (TXCAN) goes to the Adafruit board's **TX**.
+   - Pad 4 (RXCAN) goes to the Adafruit board's **RX**.
+   - If a pad is damaged, solder directly to MCP2515 pins 1 and 2 instead.
+5. **Ignore the HW-184's terminal block and J1 jumper from now on.** They connected only to the removed chip.
+
+### 2. Wire it up
+
+| From | To (NUCLEO-WL55JC) | Notes |
+|---|---|---|
+| HW-184 VCC | 3V3 | **3.3 V, not 5 V.** The MCP2515 is fine at 3.3 V |
+| HW-184 GND | GND | |
+| HW-184 CS | PA8 (CN10 morpho) | MCP2515 chip-select. Not on the Arduino header, so no clash with the shield |
+| HW-184 SCK | PA5 (morpho) | Shared with the radio shield (SPI1) |
+| HW-184 SI | PA7 (morpho) | Shared (MOSI) |
+| HW-184 SO | PA6 (morpho) | Shared (MISO). The MCP2515 releases it when CS is high |
+| HW-184 INT | not connected | The firmware polls |
+| Adafruit Vcc | 3V3 | Sets its logic level to 3.3 V; it makes its own 5 V for the bus |
+| Adafruit GND | GND | Also the bus common ground, per the embedded team's doc |
+| Adafruit SLNT | GND | Normal mode (high would be listen-only) |
+| Adafruit CANH / CANL | bus | Yellow to CANH, green to CANL, twisted (team convention) |
+| Adafruit termination switch | | ON only if this board is at one physical end of the bus |
+
+The shield covers the Arduino header, so take SCK/SI/SO from the **morpho** pins carrying the same signals (PA5/PA6/PA7). Look up the exact CN10 pin numbers for PA5, PA6, PA7 and PA8 in the NUCLEO-WL55JC user manual (UM2592) before wiring.
+
+### 3. Settings to confirm
+
+These are set in `selftest.c`:
+- `CAN_OSC_HZ`: the number printed on the HW-184's silver "OSC" crystal. Usually 8 MHz, sometimes 16 MHz.
+- `CAN_BITRATE`: the bus bit rate from the embedded team. 500 kbit/s is a placeholder.
+
+### What the CAN check proves
+
+Check 6 runs the MCP2515 in **loopback mode**. That proves:
+- The SPI wiring and chip-select.
+- The chip's reset and mode changes.
+- That the controller sends and receives a frame internally.
+
+It doesn't touch the transceiver or the bus. Testing those needs a second CAN node on the wires, such as the embedded team's board or a USB-CAN adapter.
 
 ## Status
 

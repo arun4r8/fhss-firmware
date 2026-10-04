@@ -14,6 +14,11 @@
  *   ANT_SW power    D8        PC2
  *   DIO1            D5        PB8  (not used: IRQs are polled)
  *
+ *   CAN: MCP2515 (HW-184 board, TJA1050 removed) shares SPI1 with the radio;
+ *   its chip-select is PA8 on the CN10 morpho header (not on the Arduino
+ *   header, so no clash with the shield). INT is not used (polled).
+ *   The MCP2515's TXCAN/RXCAN go to an Adafruit TJA1051T/3 transceiver.
+ *
  *   Console: LPUART1 PA2/PA3 -> ST-LINK virtual COM port, 115200 8N1
  *   LEDs: blue PB15, green PB9, red PB11
  */
@@ -32,6 +37,9 @@
 #define RADIO_BUSY_PIN  GPIO_PIN_3
 #define RADIO_ANT_PORT  GPIOC
 #define RADIO_ANT_PIN   GPIO_PIN_2
+
+#define CAN_CS_PORT     GPIOA
+#define CAN_CS_PIN      GPIO_PIN_8
 
 #define LED_BLUE_PORT   GPIOB
 #define LED_BLUE_PIN    GPIO_PIN_15

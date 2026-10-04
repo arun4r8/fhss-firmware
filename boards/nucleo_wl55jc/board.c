@@ -49,6 +49,9 @@ void board_init(void)
     output(GPIOC, 2, 0);
     pin_mode(GPIOB, 3, MODE_INPUT, 0);
 
+    /* MCP2515 chip-select idles high so it stays off the shared SPI bus */
+    output(GPIOA, 8, 1);
+
     /* SPI1 on PA5/PA6/PA7, AF5: master, mode 0, software NSS, PCLK/2 = 2 MHz */
     pin_mode(GPIOA, 5, MODE_AF, 5);
     pin_mode(GPIOA, 6, MODE_AF, 5);
