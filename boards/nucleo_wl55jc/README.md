@@ -103,7 +103,7 @@ The shield covers the Arduino header, so take SCK/SI/SO from the **morpho** pins
 ### 3. Settings to confirm
 
 These are set in `selftest.c`:
-- `CAN_OSC_HZ`: the number printed on the HW-184's silver "OSC" crystal. Usually 8 MHz, sometimes 16 MHz.
+- `CAN_OSC_HZ`: **confirmed 8 MHz** (the team's HW-184 crystal reads 8.000).
 - `CAN_BITRATE`: the bus bit rate from the embedded team. 500 kbit/s is a placeholder.
 
 ### What the CAN check proves

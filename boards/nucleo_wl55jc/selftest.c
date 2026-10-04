@@ -23,8 +23,8 @@
 #include "mcp2515.h"
 #include "sx1262.h"
 
-/* CAN settings to confirm: the crystal printed on the HW-184's "OSC" can,
- * and the bus bit rate from the embedded team. */
+/* HW-184 crystal: confirmed 8.000 MHz (marking on the "OSC" can).
+ * Bus bit rate: placeholder until the embedded team confirms it. */
 #define CAN_OSC_HZ    8000000u
 #define CAN_BITRATE   500000u
 
