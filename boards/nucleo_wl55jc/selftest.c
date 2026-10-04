@@ -59,8 +59,8 @@ static void check_can(void);
 static const char *init_hint(int err)
 {
     switch (err) {
-    case SX1262_ERR_NOT_FOUND: return "no SPI reply: shield seated? NSS on D7 (PC1)? SPI on D11-D13?";
-    case SX1262_ERR_BUSY:      return "BUSY stuck high: check D3 (PB3) and RESET on A0 (PB1)";
+    case SX1262_ERR_NOT_FOUND: return "no SPI reply: is the SX1262 shield plugged in and fully seated?";
+    case SX1262_ERR_BUSY:      return "BUSY stuck high: is the shield plugged in? (BUSY on D3/PB3, RESET on A0/PB1)";
     case SX1262_ERR_OSC:       return "oscillator did not start as crystal or TCXO";
     case SX1262_ERR_CALIB:     return "calibration failed: check 3V3 supply";
     default:                   return "";
@@ -157,7 +157,6 @@ static int run_checks(sx1262_t *r)
     }
     check("device errors", errs == 0 && !r->busy_timeout);
 
-    check_can();
     return 1;
 }
 
@@ -261,21 +260,28 @@ int main(void)
         .clock = SX1262_CLOCK_AUTO,
     };
 
-    /* Retry init every 3 s so wiring can be fixed without reflashing. */
-    while (!run_checks(&radio)) {
-        led_set(LED_RED_PORT, LED_RED_PIN, 1);
+    /* The CAN check runs whether or not the radio shield is present, so the
+     * CAN wiring can be tested on its own. Without a working radio, everything
+     * is retried every 3 s so wiring can be fixed without reflashing. */
+    for (;;) {
         failures = 0;
-        HAL_Delay(3000);
-        uart_puts("retrying...\n");
-    }
+        int radio_ok = run_checks(&radio);
+        failures += !radio_ok;
+        check_can();
 
-    uart_puts(failures ? "\nRESULT: " : "\nRESULT: all checks passed\n");
-    if (failures) {
-        uart_put_int(failures);
-        uart_puts(" check(s) failed\n");
+        uart_puts(failures ? "\nRESULT: " : "\nRESULT: all checks passed\n");
+        if (failures) {
+            uart_put_int(failures);
+            uart_puts(" check(s) failed\n");
+        }
+        led_set(LED_RED_PORT, LED_RED_PIN, failures != 0);
+        led_set(LED_GREEN_PORT, LED_GREEN_PIN, failures == 0);
+        if (radio_ok) {
+            break;
+        }
+        HAL_Delay(3000);
+        uart_puts("\nretrying...\n");
     }
-    led_set(LED_RED_PORT, LED_RED_PIN, failures != 0);
-    led_set(LED_GREEN_PORT, LED_GREEN_PIN, failures == 0);
 
     run_leader();
     for (;;) {

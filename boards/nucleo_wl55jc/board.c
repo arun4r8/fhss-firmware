@@ -48,6 +48,7 @@ void board_init(void)
     output(GPIOB, 1, 1);
     output(GPIOC, 2, 0);
     pin_mode(GPIOB, 3, MODE_INPUT, 0);
+    GPIOB->PUPDR |= 2u << (3 * 2); /* pull-down: reads "not busy" with no shield fitted */
 
     /* MCP2515 chip-select idles high so it stays off the shared SPI bus */
     output(GPIOA, 8, 1);

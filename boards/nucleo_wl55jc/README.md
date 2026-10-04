@@ -101,7 +101,13 @@ The STM32WL55 has no CAN controller, so the HW-184 board's **MCP2515** provides 
 | Adafruit CANH / CANL | bus | Yellow to CANH, green to CANL, twisted (team convention) |
 | Adafruit termination switch | | ON only if this board is at one physical end of the bus |
 
-The shield covers the Arduino header, so take SCK/SI/SO from the **morpho** pins carrying the same signals (PA5/PA6/PA7). Look up the exact CN10 pin numbers for PA5, PA6, PA7 and PA8 in the NUCLEO-WL55JC user manual (UM2592) before wiring.
+Physical pin orders, from the boards' silkscreen:
+- **HW-184 header**, top to bottom: INT, SCK, SI, SO, CS, GND, VCC.
+- **Adafruit TJA1051T/3 header**, left to right with the labels facing you: Vcc, GND, RX, TX, SLNT, CANH, CANL.
+
+**With the shield off,** the Arduino sockets are free: D13 = PA5 (SCK), D12 = PA6 (MISO), D11 = PA7 (MOSI). **With the shield on,** use the morpho pins carrying the same signals. PA8 is only on the morpho header (CN10) either way. Check pin positions in the NUCLEO-WL55JC user manual (UM2592) before wiring.
+
+The CAN check runs whether or not the radio shield is fitted, so the CAN wiring can be tested on its own.
 
 ### 3. Settings to confirm
 
