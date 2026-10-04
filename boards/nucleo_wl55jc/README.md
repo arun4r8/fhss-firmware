@@ -90,10 +90,10 @@ The STM32WL55 has no CAN controller, so the HW-184 board's **MCP2515** provides 
 |---|---|---|
 | HW-184 VCC | 3V3 | **3.3 V, not 5 V.** The MCP2515 is fine at 3.3 V |
 | HW-184 GND | GND | |
-| HW-184 CS | PA8 (CN10 morpho) | MCP2515 chip-select. Not on the Arduino header, so no clash with the shield |
-| HW-184 SCK | PA5 (morpho) | Shared with the radio shield (SPI1) |
-| HW-184 SI | PA7 (morpho) | Shared (MOSI) |
-| HW-184 SO | PA6 (morpho) | Shared (MISO). The MCP2515 releases it when CS is high |
+| HW-184 CS | D4 (PB5) | MCP2515 chip-select. The shield doesn't use D4 |
+| HW-184 SCK | D13 (PA5) | Shared with the radio shield (SPI1) |
+| HW-184 SI | D11 (PA7) | Shared (MOSI) |
+| HW-184 SO | D12 (PA6) | Shared (MISO). The MCP2515 releases it when CS is high |
 | HW-184 INT | not connected | The firmware polls |
 | Adafruit Vcc | 3V3 | Sets its logic level to 3.3 V; it makes its own 5 V for the bus |
 | Adafruit GND | GND | Also the bus common ground, per the embedded team's doc |
@@ -105,7 +105,7 @@ Physical pin orders, from the boards' silkscreen:
 - **HW-184 header**, top to bottom: INT, SCK, SI, SO, CS, GND, VCC.
 - **Adafruit TJA1051T/3 header**, left to right with the labels facing you: Vcc, GND, RX, TX, SLNT, CANH, CANL.
 
-**With the shield off,** the Arduino sockets are free: D13 = PA5 (SCK), D12 = PA6 (MISO), D11 = PA7 (MOSI). **With the shield on,** use the morpho pins carrying the same signals. PA8 is only on the morpho header (CN10) either way. Check pin positions in the NUCLEO-WL55JC user manual (UM2592) before wiring.
+Everything connects to the Nucleo's **Arduino sockets**, the black female headers marked D0–D15, A0–A5 and 3V3/5V/GND on the silkscreen. With the radio shield fitted, those sockets are under the shield. Then use the long morpho pins carrying the same signals, located with the NUCLEO-WL55JC user manual (UM2592).
 
 The CAN check runs whether or not the radio shield is fitted, so the CAN wiring can be tested on its own.
 

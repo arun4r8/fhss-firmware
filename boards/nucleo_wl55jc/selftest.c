@@ -171,7 +171,7 @@ static void check_can(void)
         uart_puts("  FAIL  CAN controller init, error ");
         uart_put_int(err);
         uart_puts(err == MCP2515_ERR_NOT_FOUND
-                      ? ": no SPI reply from MCP2515 (CS on PA8? VCC 3.3 V? SCK/SI/SO wired?)\n"
+                      ? ": no SPI reply from MCP2515 (CS on D4? VCC on 3V3? SCK/SI/SO on D13/D11/D12?)\n"
                       : "\n");
         failures++;
         return;
