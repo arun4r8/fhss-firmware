@@ -88,12 +88,12 @@ The STM32WL55 has no CAN controller, so the HW-184 board's **MCP2515** provides 
 
 | From | To (NUCLEO-WL55JC) | Notes |
 |---|---|---|
-| HW-184 VCC | 3V3 | **3.3 V, not 5 V.** The MCP2515 is fine at 3.3 V |
+| HW-184 VCC | 3.3 V rail (from CN7 pin 16) | **3.3 V, not 5 V.** The MCP2515 is fine at 3.3 V |
 | HW-184 GND | GND | |
-| HW-184 CS | D4 (PB5) | MCP2515 chip-select. The shield doesn't use D4 |
-| HW-184 SCK | D13 (PA5) | Shared with the radio shield (SPI1) |
-| HW-184 SI | D11 (PA7) | Shared (MOSI) |
-| HW-184 SO | D12 (PA6) | Shared (MISO). The MCP2515 releases it when CS is high |
+| HW-184 CS | CN10 pin 29 (PB5, Arduino D4) | MCP2515 chip-select. The shield doesn't use D4 |
+| HW-184 SCK | CN10 pin 11 (PA5, D13) | Shared with the radio shield (SPI1) |
+| HW-184 SI | CN10 pin 15 (PA7, D11) | Shared (MOSI) |
+| HW-184 SO | CN10 pin 13 (PA6, D12) | Shared (MISO). The MCP2515 releases it when CS is high |
 | HW-184 INT | not connected | The firmware polls |
 | Adafruit Vcc | 3V3 | Sets its logic level to 3.3 V; it makes its own 5 V for the bus |
 | Adafruit GND | GND | Also the bus common ground, per the embedded team's doc |
@@ -105,7 +105,18 @@ Physical pin orders, from the boards' silkscreen:
 - **HW-184 header**, top to bottom: INT, SCK, SI, SO, CS, GND, VCC.
 - **Adafruit TJA1051T/3 header**, left to right with the labels facing you: Vcc, GND, RX, TX, SLNT, CANH, CANL.
 
-Everything connects to the Nucleo's **Arduino sockets**, the black female headers marked D0–D15, A0–A5 and 3V3/5V/GND on the silkscreen. With the radio shield fitted, those sockets are under the shield. Then use the long morpho pins carrying the same signals, located with the NUCLEO-WL55JC user manual (UM2592).
+The LoRa shield occupies the Arduino sockets, so the CAN wires go on the Nucleo's long **ST morpho** pins. These are from Table 18 of ST's UM2592 (Rev 4):
+
+| Signal | Morpho pin |
+|---|---|
+| SCK (PA5, D13) | CN10 pin 11 |
+| MISO (PA6, D12) | CN10 pin 13 |
+| MOSI (PA7, D11) | CN10 pin 15 |
+| CAN CS (PB5, D4) | CN10 pin 29 |
+| 3V3 | CN7 pin 16 |
+| GND | CN10 pin 9 (also CN7 8, 19, 20, 22; CN10 20) |
+
+CN10 is the right-hand header and CN7 the left, with the antenna at the top. Pin 1 is at the top end, odd and even pins are the two columns, and the numbers are printed along the headers. CN7 pin 18 is 5V: don't use it.
 
 The CAN check runs whether or not the radio shield is fitted, so the CAN wiring can be tested on its own.
 
