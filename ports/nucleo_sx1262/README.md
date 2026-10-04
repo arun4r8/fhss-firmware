@@ -28,11 +28,7 @@ This port puts the FHSS layer on an STM32 Nucleo-64 board (written for the NUCLE
 
 ## Crystal or TCXO
 
-SX1262 shields come in a crystal version and a TCXO version, and the driver has to be told which one it's running on. Set `use_tcxo` in `main_example.c`:
-- **Crystal:** a sticker ending in **CAS**, e.g. SX1262MB2CAS. Set `use_tcxo = false`, which is the default.
-- **TCXO:** a sticker ending in **DAS**. Set `use_tcxo = true`.
-
-If this is set wrong, init fails with error **-6** (`SX1262_ERR_OSC`). Flip the setting and try again.
+SX1262 shields come in a crystal version (sticker ending **CAS**) and a TCXO version (sticker ending **DAS**). By default (`SX1262_CLOCK_AUTO`) the driver tries the crystal first and falls back to the TCXO if the oscillator doesn't start, so a shield with no sticker works too. After init, `radio.has_tcxo` says which one it found. You can force one with `SX1262_CLOCK_XTAL` or `SX1262_CLOCK_TCXO`; if a forced setting is wrong, init fails with error **-6** (`SX1262_ERR_OSC`).
 
 ## CubeMX / STM32CubeIDE setup
 
@@ -56,9 +52,10 @@ If this is set wrong, init fails with error **-6** (`SX1262_ERR_OSC`). Flip the 
 |---|---|---|
 | -1 `NOT_FOUND` | SPI readback failed | Shield seated properly, SPI1 mode 0, NSS on PA8, board powered |
 | -2 `BAD_CONFIG` | Invalid setting (e.g. power outside -9..22 dBm, or a frequency outside 902–928 MHz) | The config values in `main_example.c` |
-| -6 `OSC` | Oscillator didn't start | Flip `use_tcxo` |
+| -6 `OSC` | Oscillator didn't start | Use `SX1262_CLOCK_AUTO`, or flip the forced clock setting |
 | -7 `CALIB` | Chip calibration failed | Power supply; try another shield |
 | -8 `BUSY` | BUSY pin never went low | BUSY on PB3 set as input, and the Debug setting isn't using SWO |
+| -9 `PLL` | Synthesizer didn't lock on a frequency | Frequency in range; power supply; try another shield |
 
 ## Link parameters
 

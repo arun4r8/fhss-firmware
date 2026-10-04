@@ -2,6 +2,8 @@
 
 /* Opcodes (SX1261/2 datasheet, section 11) */
 #define OP_SET_STANDBY           0x80
+#define OP_SET_FS                0xC1
+#define OP_GET_RSSI_INST         0x15
 #define OP_SET_RX                0x82
 #define OP_SET_TX                0x83
 #define OP_SET_RF_FREQUENCY      0x86
@@ -48,6 +50,7 @@
 
 #define ERR_CALIB_MASK  0x003F /* RC64K..IMG calibration failures */
 #define ERR_XOSC_START  0x0020
+#define ERR_PLL_LOCK    0x0040
 
 #define CHIP_MODE_STBY_RC 0x2
 
@@ -212,19 +215,9 @@ static void enter_rx(sx1262_t *r)
 
 /* ---- public API -------------------------------------------------------- */
 
-sx1262_err_t sx1262_init(sx1262_t *r, const sx1262_lora_cfg_t *cfg, uint32_t freq_hz)
+/* Reset, presence check, clock setup and calibration. */
+static sx1262_err_t bring_up(sx1262_t *r, const sx1262_lora_cfg_t *cfg, bool tcxo)
 {
-    int bw = bw_code(cfg->bandwidth_hz);
-    if (bw < 0 || cfg->spreading_factor < 7 || cfg->spreading_factor > 12 ||
-        cfg->coding_rate < 1 || cfg->coding_rate > 4 || cfg->tx_power_dbm < -9 ||
-        cfg->tx_power_dbm > 22 || cfg->preamble_len < 6 || freq_hz < 902000000u ||
-        freq_hz > 928000000u) {
-        return SX1262_ERR_BAD_CONFIG;
-    }
-    r->cfg = *cfg;
-    r->rx_active = false;
-    r->busy_timeout = false;
-
     cs_high(r);
     if (r->ant_pwr_port) {
         HAL_GPIO_WritePin(r->ant_pwr_port, r->ant_pwr_pin, GPIO_PIN_SET);
@@ -252,7 +245,7 @@ sx1262_err_t sx1262_init(sx1262_t *r, const sx1262_lora_cfg_t *cfg, uint32_t fre
         return SX1262_ERR_NOT_FOUND;
     }
 
-    if (r->use_tcxo) {
+    if (tcxo) {
         /* 1.7 V on DIO3 (Semtech TCXO boards), 5 ms startup in 15.625 us units */
         uint8_t p[4] = {0x01, 0x00, 0x01, 0x40};
         cmd0(r, OP_SET_DIO3_AS_TCXO, p, 4);
@@ -269,6 +262,35 @@ sx1262_err_t sx1262_init(sx1262_t *r, const sx1262_lora_cfg_t *cfg, uint32_t fre
     }
     if (errs & ERR_CALIB_MASK) {
         return SX1262_ERR_CALIB;
+    }
+    r->has_tcxo = tcxo;
+    return SX1262_OK;
+}
+
+sx1262_err_t sx1262_init(sx1262_t *r, const sx1262_lora_cfg_t *cfg, uint32_t freq_hz)
+{
+    int bw = bw_code(cfg->bandwidth_hz);
+    if (bw < 0 || cfg->spreading_factor < 7 || cfg->spreading_factor > 12 ||
+        cfg->coding_rate < 1 || cfg->coding_rate > 4 || cfg->tx_power_dbm < -9 ||
+        cfg->tx_power_dbm > 22 || cfg->preamble_len < 6 || freq_hz < 902000000u ||
+        freq_hz > 928000000u) {
+        return SX1262_ERR_BAD_CONFIG;
+    }
+    r->cfg = *cfg;
+    r->rx_active = false;
+    r->busy_timeout = false;
+
+    sx1262_err_t err;
+    if (r->clock == SX1262_CLOCK_AUTO) {
+        err = bring_up(r, cfg, false);
+        if (err == SX1262_ERR_OSC) {
+            err = bring_up(r, cfg, true); /* crystal didn't start: try TCXO */
+        }
+    } else {
+        err = bring_up(r, cfg, r->clock == SX1262_CLOCK_TCXO);
+    }
+    if (err != SX1262_OK) {
+        return err;
     }
 
     cmd1(r, OP_SET_REGULATOR_MODE, REGULATOR_DCDC);
@@ -397,4 +419,33 @@ int sx1262_read_packet(sx1262_t *r, uint8_t *buf, uint8_t max, int16_t *rssi_dbm
         *rssi_dbm = (int16_t)(-(int16_t)ps[1] / 2);
     }
     return len;
+}
+
+sx1262_err_t sx1262_check_pll(sx1262_t *r, uint32_t freq_hz)
+{
+    bool was_rx = r->rx_active;
+    standby(r);
+    uint8_t clr[2] = {0, 0};
+    cmd0(r, OP_CLEAR_DEVICE_ERRORS, clr, 2);
+    write_rf_frequency(r, freq_hz);
+    cmd0(r, OP_SET_FS, 0, 0);
+    HAL_Delay(1); /* PLL settles in well under 100 us */
+    uint16_t errs = get_device_errors(r);
+    standby(r);
+    if (was_rx) {
+        enter_rx(r);
+    }
+    return (errs & ERR_PLL_LOCK) ? SX1262_ERR_PLL : SX1262_OK;
+}
+
+int16_t sx1262_rssi_inst(sx1262_t *r)
+{
+    uint8_t b[2];
+    query(r, OP_GET_RSSI_INST, 0, 0, b, 2);
+    return (int16_t)(-(int16_t)b[1] / 2);
+}
+
+uint16_t sx1262_device_errors(sx1262_t *r)
+{
+    return get_device_errors(r);
 }

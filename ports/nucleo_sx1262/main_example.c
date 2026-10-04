@@ -54,7 +54,7 @@ int main(void)
         .rst_port = RADIO_RST_GPIO_Port, .rst_pin = RADIO_RST_Pin,     /* A0 / PA0 */
         .busy_port = RADIO_BUSY_GPIO_Port, .busy_pin = RADIO_BUSY_Pin, /* D3 / PB3 */
         .ant_pwr_port = RADIO_ANT_GPIO_Port, .ant_pwr_pin = RADIO_ANT_Pin, /* D8 / PA9 */
-        .use_tcxo = false, /* true only if the shield sticker says ...DAS (TCXO) */
+        .clock = SX1262_CLOCK_AUTO, /* detects crystal (CAS) vs TCXO (DAS) shields */
         .leader = NODE_IS_LEADER,
         .seed = FHSS_SEED,
         .net_id = FHSS_NET_ID,

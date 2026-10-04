@@ -33,7 +33,7 @@ typedef struct {
     uint16_t busy_pin;
     GPIO_TypeDef *ant_pwr_port; /* shield antenna-switch supply (D8), or NULL */
     uint16_t ant_pwr_pin;
-    bool use_tcxo;              /* crystal shields: false; TCXO (*DAS) shields: true */
+    sx1262_clock_t clock;       /* SX1262_CLOCK_AUTO unless you know the shield */
 
     bool leader;         /* exactly one leader per network */
     uint32_t seed;       /* hop sequence seed, same on every node */

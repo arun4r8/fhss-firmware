@@ -2,8 +2,8 @@
  * Host-side stand-in for the STM32 HAL. SPI traffic is routed to an
  * emulated SX1262 (tests/mocks/sx1262_emu.c); HAL_GetTick() is virtual time.
  */
-#ifndef MOCK_STM32F4XX_HAL_H
-#define MOCK_STM32F4XX_HAL_H
+#ifndef MOCK_HAL_H
+#define MOCK_HAL_H
 
 #include <stdint.h>
 

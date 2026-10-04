@@ -36,6 +36,7 @@ static void power_on_reset(sx1262_emu_t *e)
     /* datasheet: with a TCXO, XOSC_START_ERR is raised at power-on */
     e->errors = e->has_tcxo ? 0x0020 : 0;
     e->tcxo_cfg = e->calibrated = e->dio2_rf_switch = false;
+    e->noise_rssi = 220; /* -110 dBm */
     e->tx_active = false;
     e->busy_until_ms = emu_now_ms + 4;
 }
@@ -162,6 +163,12 @@ static void build_response(sx1262_emu_t *e)
     case 0x14: /* GetPacketStatus: RssiPkt = -dBm * 2 */
         e->resp[1] = 114;
         break;
+    case 0x15: /* GetRssiInst */
+        if (e->mode != EMU_RX) {
+            violation(e, "GetRssiInst outside RX");
+        }
+        e->resp[1] = e->noise_rssi;
+        break;
     case 0x1D: { /* ReadRegister */
         uint16_t a = (uint16_t)((e->cmd[1] << 8) | e->cmd[2]);
         for (int i = 0; i < 16; i++) {
@@ -233,6 +240,14 @@ static void execute(sx1262_emu_t *e)
         }
         e->calibrated = true;
         e->busy_until_ms = emu_now_ms + 4;
+        break;
+    case 0xC1: /* SetFs */
+        if (!e->calibrated) violation(e, "SetFs before calibration");
+        e->mode = EMU_FS;
+        if (e->pll_fail || e->rf_freq < sx1262_rf_freq_from_hz(150000000u) ||
+            e->rf_freq > sx1262_rf_freq_from_hz(960000000u)) {
+            e->errors |= 0x0040; /* PLL_LOCK_ERR */
+        }
         break;
     case 0x8A: e->packet_type = p[0]; break;
     case 0x8B:

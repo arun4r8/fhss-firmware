@@ -89,7 +89,7 @@ static void test_init_state(void)
 
 static void test_init_errors(void)
 {
-    printf("init diagnoses missing chip, stuck BUSY, TCXO mismatch, bad config\n");
+    printf("init diagnoses missing chip, stuck BUSY, clock mismatch, auto-detects clock\n");
     static sx1262_emu_t e;
     sx1262_t r;
 
@@ -105,24 +105,34 @@ static void test_init_errors(void)
     r = radio_on(&e);
     CHECK(sx1262_init(&r, &sf7, 915000000u) == SX1262_ERR_BUSY, "stuck BUSY not detected");
 
+    /* forced clock settings that don't match the board */
     emu_reset_world();
     emu_add_radio(&e, 0);
-    e.has_tcxo = true; /* TCXO board, driver told crystal */
+    e.has_tcxo = true;
     r = radio_on(&e);
-    CHECK(sx1262_init(&r, &sf7, 915000000u) == SX1262_ERR_OSC, "TCXO board without use_tcxo");
+    r.clock = SX1262_CLOCK_XTAL;
+    CHECK(sx1262_init(&r, &sf7, 915000000u) == SX1262_ERR_OSC, "TCXO board forced to crystal");
 
     emu_reset_world();
     emu_add_radio(&e, 0);
     r = radio_on(&e);
-    r.use_tcxo = true; /* crystal board, driver told TCXO */
-    CHECK(sx1262_init(&r, &sf7, 915000000u) == SX1262_ERR_OSC, "crystal board with use_tcxo");
+    r.clock = SX1262_CLOCK_TCXO;
+    CHECK(sx1262_init(&r, &sf7, 915000000u) == SX1262_ERR_OSC, "crystal board forced to TCXO");
+
+    /* auto-detect finds either clock */
+    emu_reset_world();
+    emu_add_radio(&e, 0);
+    r = radio_on(&e);
+    CHECK(sx1262_init(&r, &sf7, 915000000u) == SX1262_OK && !r.has_tcxo && !e.tcxo_cfg,
+          "auto on crystal board");
+    NO_VIOLATIONS(&e);
 
     emu_reset_world();
     emu_add_radio(&e, 0);
     e.has_tcxo = true;
     r = radio_on(&e);
-    r.use_tcxo = true;
-    CHECK(sx1262_init(&r, &sf7, 915000000u) == SX1262_OK, "TCXO board with use_tcxo failed");
+    CHECK(sx1262_init(&r, &sf7, 915000000u) == SX1262_OK && r.has_tcxo && e.tcxo_cfg,
+          "auto on TCXO board");
     NO_VIOLATIONS(&e);
 
     sx1262_lora_cfg_t bad = sf7;
@@ -164,6 +174,31 @@ static void test_send_receive_and_retune(void)
     CHECK(sx1262_read_packet(&b, buf, sizeof(buf), NULL) == 0, "received on wrong channel");
     NO_VIOLATIONS(&ea);
     NO_VIOLATIONS(&eb);
+}
+
+
+static void test_bringup_checks(void)
+{
+    printf("bring-up checks: PLL lock on all 50 channels, RSSI, PLL failure\n");
+    emu_reset_world();
+    static sx1262_emu_t e;
+    emu_add_radio(&e, 0);
+    sx1262_t r = radio_on(&e);
+    sx1262_init(&r, &sf7, 915000000u);
+    sx1262_start_rx(&r);
+
+    int locked = 0;
+    for (uint32_t ch = 0; ch < 50; ch++) {
+        locked += sx1262_check_pll(&r, 902200000u + ch * 500000u) == SX1262_OK;
+    }
+    CHECK(locked == 50, "PLL locked on %d of 50 channels", locked);
+    CHECK(e.mode == EMU_RX, "check_pll did not return to RX");
+    CHECK(sx1262_rssi_inst(&r) == -110, "rssi %d", sx1262_rssi_inst(&r));
+    CHECK(sx1262_device_errors(&r) == 0, "device errors %04X", sx1262_device_errors(&r));
+    NO_VIOLATIONS(&e);
+
+    e.pll_fail = true;
+    CHECK(sx1262_check_pll(&r, 915000000u) == SX1262_ERR_PLL, "PLL failure not reported");
 }
 
 /* ---- link end to end --------------------------------------------------- */
@@ -361,6 +396,7 @@ int main(void)
     test_init_state();
     test_init_errors();
     test_send_receive_and_retune();
+    test_bringup_checks();
     test_link_end_to_end();
     test_foreign_network_ignored();
 

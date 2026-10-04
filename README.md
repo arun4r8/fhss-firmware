@@ -23,6 +23,7 @@ These come from FCC 47 CFR 15.247(a)(1)(i). Have the team's RF lead check this a
 ## Ports
 
 - **Nucleo-64 + Semtech SX1262MB2xAS shield**: [`ports/nucleo_sx1262`](ports/nucleo_sx1262/README.md) covers pins, CubeMX setup, init error codes and a ready-to-paste `main.c`.
+- **NUCLEO-WL55JC + SX1262 shield (the team's current hardware)**: [`boards/nucleo_wl55jc`](boards/nucleo_wl55jc/README.md) is a ready-to-flash self-test, built with only `arm-none-eabi-gcc` and flashed by drag-and-drop.
 
 ## Porting to other hardware
 

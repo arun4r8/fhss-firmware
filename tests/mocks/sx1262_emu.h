@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "stm32f4xx_hal.h"
+#include "mock_hal.h"
 
 #define EMU_MAX_LOG 8192
 
@@ -33,6 +33,8 @@ typedef struct sx1262_emu {
     bool present;    /* false: nothing on the bus, MISO reads 0 */
     bool has_tcxo;   /* board clock: TCXO (true) or crystal (false) */
     bool busy_stuck; /* BUSY pin never releases */
+    bool pll_fail;   /* synthesizer never locks */
+    uint8_t noise_rssi; /* GetRssiInst value: -dBm * 2 */
 
     emu_mode_t mode;
     bool cs_low;
