@@ -42,6 +42,9 @@ typedef struct {
 
     fhss_link_rx_cb on_rx;
     void *user;
+    /* optional: runs while a transmission is in progress (see
+     * sx1262_t.tx_wait_hook); may call fhss_link_send() but not poll() */
+    void (*tx_wait_hook)(void *user);
 } fhss_link_config_t;
 
 typedef struct {

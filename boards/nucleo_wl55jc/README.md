@@ -1,6 +1,6 @@
-# NUCLEO-WL55JC + SX1262 shield: self-test firmware
+# NUCLEO-WL55JC + SX1262 shield: self-test and CAN bridge firmware
 
-Bring-up firmware for one board: a **NUCLEO-WL55JC** (board number MB1389) with the Semtech **SX1262MB2xAS** shield plugged into its Arduino header. It checks the radio, then hops as the FHSS leader so you can watch it.
+Two programs (the bridge is [below](#can-bridge-firmware)). The self-test is bring-up firmware for one board: a **NUCLEO-WL55JC** (board number MB1389) with the Semtech **SX1262MB2xAS** shield plugged into its Arduino header. It checks the radio, then hops as the FHSS leader so you can watch it.
 
 > **Why the shield and not the WL55's own radio?** The STM32WL55 has a sub-GHz radio built in. But the **JC2** board is the low-band version: its antenna circuit is tuned for 433–510 MHz, not 902–928 MHz. So the WL55 is used only as the microcontroller here, and the 915 MHz shield does the radio work. Don't transmit on the Nucleo's own antenna connector. A **JC1** (high-band) board could use its built-in radio instead, which would need a different driver transport.
 
@@ -135,6 +135,31 @@ Check 6 runs the MCP2515 in **loopback mode**. That proves:
 
 It doesn't touch the transceiver or the bus. Testing those needs a second CAN node on the wires, such as the embedded team's board or a USB-CAN adapter.
 
+## CAN bridge firmware
+
+`bridge.c` forwards the embedded team's hub messages from the pod's CAN bus over the hopping link. Build one role per board:
+
+```sh
+make bridge ROLE=pod           # build/bridge-pod.bin: CAN -> radio, hopping leader
+make bridge ROLE=ground        # build/bridge-ground.bin: radio -> console (+ CAN if wired)
+make bridge ROLE=pod DEMO=1    # build/bridge-demo.bin: one board, no CAN bus needed
+make flash APP=bridge ROLE=pod DEMO=1
+```
+
+- **Pod** (leader): reads every CAN frame from the MCP2515, reassembles hub messages, and sends each hub's newest message over the radio. Its every-dwell beacon carries the telemetry. The radio driver keeps draining the MCP2515 while a packet is on air (about 75 ms), because the MCP2515 only holds 2 received frames.
+- **Ground** (follower): prints each message it receives, for example `rx hub 3, rssi -48 dBm: 0=1234 1=1235 ...` (a `!` after a sensor ID means its error bit is set). If an MCP2515 is connected, it also re-sends the message on CAN as ID `0x200 + hub`.
+- **Demo:** with only one setup, `DEMO=1` puts the MCP2515 in loopback and feeds it a fake 10-sensor message from hub 3 every 100 ms. Reassembly, chunking and transmission all run as on the pod. The status line every 5 s should show hub messages climbing, about 5 sent per second, and the rest counted as "replaced by newer".
+
+Placeholders at the top of `bridge.c`, to confirm with the embedded team:
+
+| Setting | Placeholder | Question |
+|---|---|---|
+| `CAN_BITRATE` | 500 kbit/s | Bus bit rate (1 Mbit/s isn't reachable with the 8 MHz crystal) |
+| `HUB_ID_MASK` / `HUB_ID_MATCH` | forward every ID | Which CAN IDs carry hub messages |
+| `GROUND_ID_BASE` | `0x200 + hub` | IDs for re-sending at the ground station, if it has a CAN bus |
+
+The bridge logic is in `src/can_bridge.c`, and host tests cover it: `tests/test_can_bridge.c`, plus a 60-second run in `tests/test_port_sx1262.c` with two hubs sending 20 messages a second through emulated radios.
+
 ## Status
 
 **First hardware run: 2026-10-04, all checks passed.** NUCLEO-WL55JC2 + SX1262MB2xAS shield (crystal / CAS version) + HW-184 MCP2515 wired per this README:
@@ -164,3 +189,4 @@ Measured send time is 2–3 ms longer than the calculated airtime. That's SPI an
 - **Over-the-air reception and leader/follower sync:** needs a second radio setup.
 - **The hop pattern on a spectrum analyzer or SDR.**
 - **The CAN transceiver and bus:** the loopback check stays inside the MCP2515, so this needs a second CAN node.
+- **The CAN bridge:** tested only in host emulation so far. The single-board demo (`DEMO=1`) is the first hardware step.

@@ -46,6 +46,12 @@ typedef struct {
     GPIO_TypeDef *ant_pwr_port; /* shield RF switch supply, NULL if none */
     uint16_t ant_pwr_pin;
     sx1262_clock_t clock;
+    /* Called repeatedly while sx1262_send() waits for TxDone (~75 ms for a
+     * full packet), so the application can keep servicing other devices,
+     * e.g. drain the CAN controller before its 2 receive buffers overflow.
+     * It must not call into this driver. NULL if not needed. */
+    void (*tx_wait_hook)(void *ctx);
+    void *tx_wait_ctx;
 
     bool has_tcxo;              /* set by init: the clock actually in use */
 

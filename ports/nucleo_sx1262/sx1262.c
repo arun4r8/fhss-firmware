@@ -379,6 +379,9 @@ sx1262_err_t sx1262_send(sx1262_t *r, const uint8_t *data, uint8_t len)
             err = SX1262_ERR_TIMEOUT;
             break;
         }
+        if (r->tx_wait_hook) {
+            r->tx_wait_hook(r->tx_wait_ctx);
+        }
     }
     clear_irq(r, IRQ_ALL);
     sx1262_start_rx(r);

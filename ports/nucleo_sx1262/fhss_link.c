@@ -42,6 +42,8 @@ fhss_link_err_t fhss_link_init(fhss_link_t *l, const fhss_link_config_t *cfg)
     l->radio.ant_pwr_port = cfg->ant_pwr_port;
     l->radio.ant_pwr_pin = cfg->ant_pwr_pin;
     l->radio.clock = cfg->clock;
+    l->radio.tx_wait_hook = cfg->tx_wait_hook;
+    l->radio.tx_wait_ctx = cfg->user;
 
     sx1262_lora_cfg_t lora = link_lora;
     lora.tx_power_dbm = cfg->tx_power_dbm;

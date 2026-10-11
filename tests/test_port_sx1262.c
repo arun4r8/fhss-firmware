@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "can_bridge.h"
 #include "fhss_link.h"
 #include "sx1262.h"
 #include "sx1262_emu.h"
@@ -439,6 +440,146 @@ static void test_foreign_network_ignored(void)
     CHECK(fol.stats.rx_foreign > 0, "never saw the foreign beacons");
 }
 
+/* ---- CAN bridge over the link ---------------------------------------- */
+
+typedef struct {
+    fhss_link_t *link;
+    can_bridge_t bridge;
+    int got[16];           /* messages received per hub */
+    int bad;               /* payloads that failed to decode or verify */
+    uint32_t max_age_ms;   /* oldest reading delivered */
+} bridge_node_t;
+
+static bool bridge_radio_idle(void *user)
+{
+    return ((bridge_node_t *)user)->link->q_count == 0;
+}
+
+static bool bridge_radio_send(void *user, const uint8_t *data, uint8_t len)
+{
+    return fhss_link_send(((bridge_node_t *)user)->link, data, len);
+}
+
+/* every reading in a test message is the send time in units of 10 ms */
+static void bridge_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi)
+{
+    (void)rssi;
+    bridge_node_t *n = user;
+    can_hub_msg_t m;
+    uint8_t frames[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
+    uint16_t id;
+    uint8_t nf = can_bridge_from_radio(&n->bridge, data, len, &m, frames, dlc, &id);
+    if (nf == 0 || m.count != 10 || id != 0x200 + m.hub) {
+        n->bad++;
+        return;
+    }
+    for (uint8_t i = 1; i < m.count; i++) {
+        if (m.sensor[i].reading != m.sensor[0].reading || m.sensor[i].id != i) {
+            n->bad++;
+            return;
+        }
+    }
+    uint32_t age = emu_now_ms - 10u * m.sensor[0].reading;
+    n->max_age_ms = age > n->max_age_ms ? age : n->max_age_ms;
+    n->got[m.hub & 15]++;
+}
+
+/* Hubs 3 and 6 each send a 10-sensor message every 50 ms, offset by 25 ms.
+ * Catches up on every millisecond since the last call, so traffic keeps
+ * arriving while a transmission blocks the main loop (via the tx-wait hook). */
+static uint32_t hub_next_ms;
+static int hub_msgs;
+
+static void hub_traffic(void *user)
+{
+    bridge_node_t *pod = user;
+    for (; hub_next_ms <= emu_now_ms; hub_next_ms += 25) {
+        uint8_t hub = hub_next_ms % 50 == 0 ? 3 : 6;
+        can_hub_msg_t m = {.hub = hub, .count = 10};
+        for (uint8_t i = 0; i < 10; i++) {
+            m.sensor[i] = (can_sensor_t){.type = 1, .id = i, .reading = (uint16_t)(hub_next_ms / 10)};
+        }
+        uint8_t buf[CAN_MSG_MAX_BYTES], data[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
+        uint8_t nf = can_msg_to_frames(buf, can_msg_encode(&m, buf, sizeof(buf)), data, dlc);
+        for (uint8_t f = 0; f < nf; f++) {
+            can_bridge_on_frame(&pod->bridge, (uint16_t)(0x100 + hub), data[f], dlc[f], emu_now_ms);
+        }
+        hub_msgs++;
+    }
+}
+
+static void test_can_bridge_over_link(void)
+{
+    printf("CAN bridge: two hubs on the pod's bus -> hopping link -> ground (60 s)\n");
+    emu_reset_world();
+    static sx1262_emu_t ea, eb;
+    static fhss_link_t pod_link, gnd_link;
+    static bridge_node_t pod, gnd;
+    memset(&pod, 0, sizeof(pod));
+    memset(&gnd, 0, sizeof(gnd));
+    pod.link = &pod_link;
+    gnd.link = &gnd_link;
+    emu_add_radio(&ea, 0);
+    emu_add_radio(&eb, 1);
+
+    can_bridge_config_t bc = {
+        .rx_id_mask = 0x7F0, .rx_id_match = 0x100, .tx_id_base = 0x200,
+        .max_payload = FHSS_LINK_MAX_PAYLOAD,
+        .radio_idle = bridge_radio_idle, .radio_send = bridge_radio_send,
+    };
+    bc.user = &pod;
+    CHECK(can_bridge_init(&pod.bridge, &bc), "pod bridge init");
+    bc.user = &gnd;
+    CHECK(can_bridge_init(&gnd.bridge, &bc), "ground bridge init");
+
+    /* pod = leader (its beacons carry the telemetry), ground = follower */
+    fhss_link_config_t pc = link_cfg(&ea, true, NULL), gc = link_cfg(&eb, false, NULL);
+    pc.on_rx = bridge_on_rx;
+    pc.user = &pod;
+    pc.tx_wait_hook = hub_traffic;
+    gc.on_rx = bridge_on_rx;
+    gc.user = &gnd;
+    CHECK(fhss_link_init(&pod_link, &pc) == FHSS_LINK_OK, "pod link init");
+    CHECK(fhss_link_init(&gnd_link, &gc) == FHSS_LINK_OK, "ground link init");
+
+    uint32_t t_lock = 0;
+    hub_next_ms = 0;
+    hub_msgs = 0;
+    while (emu_now_ms < 60000) {
+        if (!t_lock && fhss_link_locked(&gnd_link)) {
+            t_lock = emu_now_ms;
+        }
+        hub_traffic(&pod);
+        can_bridge_poll(&pod.bridge);
+        fhss_link_poll(&pod_link);
+        fhss_link_poll(&gnd_link);
+        emu_now_ms++;
+    }
+    int delivered = gnd.got[3] + gnd.got[6];
+    uint32_t locked_s = t_lock ? (60000 - t_lock) / 1000 : 0;
+    printf("  %d hub messages on CAN, %u handed to radio, %d delivered over %u s locked "
+           "(hub 3: %d, hub 6: %d), oldest reading %u ms\n",
+           hub_msgs, pod.bridge.stats.messages_sent, delivered, locked_s, gnd.got[3], gnd.got[6],
+           gnd.max_age_ms);
+    CHECK(t_lock, "ground never locked");
+    CHECK(gnd.bad == 0 && gnd.bridge.stats.radio_bad == 0, "%d bad payloads", gnd.bad);
+    CHECK(pod.bridge.stats.messages_in == (uint32_t)hub_msgs && pod.bridge.stats.reasm_errors == 0,
+          "pod reassembled %u of %d", pod.bridge.stats.messages_in, hub_msgs);
+    CHECK(pod_link.stats.tx_dropped == 0 && pod.bridge.stats.radio_refused == 0,
+          "radio queue overflowed");
+    /* about two 31-byte packets per leader half-dwell = 5 per second */
+    CHECK(delivered >= (int)locked_s * 4, "only %d delivered in %u s", delivered, locked_s);
+    CHECK(gnd.got[3] * 10 >= delivered * 4 && gnd.got[6] * 10 >= delivered * 4,
+          "hubs not sharing the link: %d vs %d", gnd.got[3], gnd.got[6]);
+    CHECK(hub_msgs >= 2390, "only %d hub messages generated", hub_msgs);
+    /* Fresh data. Worst case: a message completes just after the leader's
+     * half-dwell closes (~290 ms wait), then waits behind the other hub's
+     * packet (~75 ms) and goes out (~75 ms), plus slot margins. */
+    CHECK(gnd.max_age_ms <= 550, "oldest delivered reading %u ms", gnd.max_age_ms);
+    NO_VIOLATIONS(&ea);
+    NO_VIOLATIONS(&eb);
+}
+
 int main(void)
 {
     test_freq_and_airtime();
@@ -449,6 +590,7 @@ int main(void)
     test_link_end_to_end();
     test_link_max_payload();
     test_foreign_network_ignored();
+    test_can_bridge_over_link();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

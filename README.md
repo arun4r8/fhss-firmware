@@ -23,7 +23,17 @@ These come from FCC 47 CFR 15.247(a)(1)(i). Have the team's RF lead check this a
 ## Ports
 
 - **Nucleo-64 + Semtech SX1262MB2xAS shield**: [`ports/nucleo_sx1262`](ports/nucleo_sx1262/README.md) covers pins, CubeMX setup, init error codes and a ready-to-paste `main.c`.
-- **NUCLEO-WL55JC + SX1262 shield (the team's current hardware)**: [`boards/nucleo_wl55jc`](boards/nucleo_wl55jc/README.md) is a ready-to-flash self-test, built with only `arm-none-eabi-gcc` and flashed by drag-and-drop.
+- **NUCLEO-WL55JC + SX1262 shield (the team's current hardware)**: [`boards/nucleo_wl55jc`](boards/nucleo_wl55jc/README.md) has a ready-to-flash self-test and the CAN bridge firmware, built with only `arm-none-eabi-gcc` and flashed by drag-and-drop.
+
+## CAN bridge
+
+`src/can_bridge.c` carries the embedded team's hub messages (`src/can_msg.c`) from the pod's CAN bus over the hopping link to the ground station. It has no hardware dependencies, so the host tests run the same code as the board:
+
+- **Pod side:** reassembles each sender's CAN frames, keeps only the newest unsent message per sender, and hands one message at a time to the radio, taking turns between senders. Messages too big for one 31-byte radio payload are split on sensor-record boundaries, and every piece is a valid message on its own.
+- **Ground side:** checks each payload and rebuilds its CAN frames.
+- **Throughput:** the link carries about five 31-byte payloads a second each way, so with hubs sending faster than that, the ground sees each hub's latest reading, at most about half a second old.
+
+Per packet, the hopping layer adds 6 bytes (network ID, flags, 4-byte hop sync) and the hub format adds 1 byte plus 1 byte per sensor. A 10-sensor message is 37 bytes on air, 20 of them readings.
 
 ## Porting to other hardware
 
