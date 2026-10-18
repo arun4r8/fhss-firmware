@@ -17,6 +17,13 @@
  *
  * Console (ST-LINK virtual COM port, 115200 8N1): a status line every 5 s;
  * the ground station also prints every message it receives.
+ *
+ * Machine-readable log lines for tools/matlab (HOP_LOG 0 turns them off):
+ *   CFG,<role>,<seed>,<channels>,<base_hz>,<spacing_hz>,<dwell_ms>   once at start
+ *   HOP,<ms>,<hop_index>,<channel>,<H|S>   every channel change (S = searching)
+ *   TX,<ms>,<hop_index>,<channel>,<payload bytes>   ms = start of transmission
+ *   RX,<ms>,<hop_index>,<channel>          a packet from our network arrived
+ * ms is the board's uptime clock; hop_index is the position in the sequence.
  * LEDs: blue toggles on every hop, green = link up (ground: locked to the
  *       pod), red = CAN controller or radio problem.
  */
@@ -49,6 +56,9 @@
 #define TX_DBM          0         /* bench power; raise for range tests */
 #define STATUS_EVERY_MS 5000u
 #define DEMO_EVERY_MS   100u      /* fake hub message rate in DEMO mode */
+#ifndef HOP_LOG
+#define HOP_LOG 1
+#endif
 
 static fhss_link_t link;
 static can_bridge_t bridge;
@@ -149,6 +159,33 @@ static void demo_hub_message(void)
     }
 }
 
+static void log_fields(const char *tag, uint32_t ms)
+{
+    uart_puts(tag);
+    uart_puts(",");
+    uart_put_int((int32_t)ms);
+    uart_puts(",");
+    uart_put_int(link.fhss.hop_index);
+    uart_puts(",");
+    uart_put_int(fhss_current_channel(&link.fhss));
+}
+
+static void log_config(void)
+{
+    const fhss_config_t *c = &link.fhss.cfg;
+    uart_puts(BRIDGE_ROLE == ROLE_POD ? "CFG,pod," : "CFG,ground,");
+    uart_put_int((int32_t)c->seed);
+    uart_puts(",");
+    uart_put_int(c->num_channels);
+    uart_puts(",");
+    uart_put_int((int32_t)c->base_freq_hz);
+    uart_puts(",");
+    uart_put_int((int32_t)c->channel_spacing_hz);
+    uart_puts(",");
+    uart_put_int(c->dwell_ms);
+    uart_puts("\n");
+}
+
 static void print_status(void)
 {
     const can_bridge_stats_t *b = &bridge.stats;
@@ -241,7 +278,15 @@ int main(void)
     led_set(LED_RED_PORT, LED_RED_PIN, !can_ok && BRIDGE_ROLE == ROLE_POD);
     uart_puts(BRIDGE_ROLE == ROLE_POD ? "radio up, hopping\n" : "radio up, searching for the pod\n");
 
+    if (HOP_LOG) {
+        log_config();
+        log_fields("HOP", HAL_GetTick());
+        uart_puts(fhss_link_locked(&link) ? ",H\n" : ",S\n");
+    }
+
     uint16_t last_hop = link.fhss.hop_index;
+    uint32_t last_tx = 0, last_rx = 0;
+    bool was_locked = fhss_link_locked(&link);
     uint32_t next_status = HAL_GetTick() + STATUS_EVERY_MS;
     uint32_t next_demo = HAL_GetTick() + DEMO_EVERY_MS;
     for (;;) {
@@ -253,8 +298,31 @@ int main(void)
             drain_can(NULL);
             can_bridge_poll(&bridge);
         }
+        /* what the next transmission would carry, to log its length */
+        uint8_t queued_len = link.q_count ? link.queue[link.q_head].len : 0;
         fhss_link_poll(&link);
 
+        if (HOP_LOG && link.stats.tx_packets != last_tx) {
+            last_tx = link.stats.tx_packets;
+            /* poll returns once the packet is sent: back-date to its start */
+            uint32_t air = sx1262_airtime_ms(&link.radio.cfg, (uint8_t)(FHSS_LINK_HEADER_LEN + queued_len));
+            log_fields("TX", HAL_GetTick() - air);
+            uart_puts(",");
+            uart_put_int(queued_len);
+            uart_puts("\n");
+        }
+        if (HOP_LOG && link.stats.rx_packets != last_rx) {
+            last_rx = link.stats.rx_packets;
+            log_fields("RX", HAL_GetTick());
+            uart_puts("\n");
+        }
+        if (link.fhss.hop_index != last_hop || (HOP_LOG && fhss_link_locked(&link) != was_locked)) {
+            was_locked = fhss_link_locked(&link);
+            if (HOP_LOG) {
+                log_fields("HOP", HAL_GetTick());
+                uart_puts(was_locked ? ",H\n" : ",S\n");
+            }
+        }
         if (link.fhss.hop_index != last_hop) {
             last_hop = link.fhss.hop_index;
             led_toggle(LED_BLUE_PORT, LED_BLUE_PIN);

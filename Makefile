@@ -51,7 +51,16 @@ $(BUILD)/test_mcp2515: $(CAN_DRV)/mcp2515.c $(CAN_DRV)/mcp2515.h $(MOCKS)/mcp251
 	$(CC) $(CFLAGS) $(TESTFLAGS) $(MOCKHAL) -I$(MOCKS) -I$(CAN_DRV) \
 		$(CAN_DRV)/mcp2515.c $(MOCKS)/mcp2515_emu.c tests/test_mcp2515.c -o $@
 
-test: $(BUILD)/fhss.o $(BUILD)/port.stamp $(BUILD)/test_fhss $(BUILD)/test_port \
+# MATLAB tools compare against sequences from the real C code; fail if the
+# checked-in reference has drifted from src/fhss.c
+$(BUILD)/matlab_ref.stamp: $(CORE_SRC) include/fhss.h tools/matlab/gen_ref_sequences.c \
+		tools/matlab/ref_sequences.csv | $(BUILD)
+	$(CC) $(CFLAGS) tools/matlab/gen_ref_sequences.c $(CORE_SRC) -o $(BUILD)/gen_ref
+	./$(BUILD)/gen_ref | diff -q - tools/matlab/ref_sequences.csv || \
+		(echo "tools/matlab/ref_sequences.csv is stale: ./$(BUILD)/gen_ref > tools/matlab/ref_sequences.csv"; exit 1)
+	touch $@
+
+test: $(BUILD)/matlab_ref.stamp $(BUILD)/fhss.o $(BUILD)/port.stamp $(BUILD)/test_fhss $(BUILD)/test_port \
 		$(BUILD)/test_can_msg $(BUILD)/test_can_bridge $(BUILD)/test_mcp2515
 	./$(BUILD)/test_fhss
 	./$(BUILD)/test_port
