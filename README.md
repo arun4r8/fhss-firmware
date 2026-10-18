@@ -29,9 +29,12 @@ These come from FCC 47 CFR 15.247(a)(1)(i). Have the team's RF lead check this a
 
 `src/can_bridge.c` carries the embedded team's hub messages (`src/can_msg.c`) from the pod's CAN bus over the hopping link to the ground station. It has no hardware dependencies, so the host tests run the same code as the board:
 
-- **Pod side:** reassembles each sender's CAN frames, keeps only the newest unsent message per sender, and hands one message at a time to the radio, taking turns between senders. Messages too big for one 31-byte radio payload are split on sensor-record boundaries, and every piece is a valid message on its own.
+- **Pod side:** reassembles each sender's CAN frames, then queues each complete message (`CAN_BRIDGE_QUEUE_LEN`, default 32) and hands them to the radio one at a time. Messages too big for one 31-byte radio payload are split on sensor-record boundaries, and every piece is a valid message on its own. If the radio refuses a payload partway through a message, the next poll resumes from that payload.
 - **Ground side:** checks each payload and rebuilds its CAN frames.
-- **Throughput:** the link carries about five 31-byte payloads a second each way, so with hubs sending faster than that, the ground sees each hub's latest reading, at most about half a second old.
+- **Two modes:**
+  - **Default, lossless:** every message is sent, in arrival order. The queue absorbs bursts; a message is only dropped if the queue is full, and that is counted (`queue_full`). This meets "buffer CAN packets without losing CAN data".
+  - **`latest_only`:** a newer message from a sender replaces its queued, unsent one (`superseded`). For telemetry arriving faster than the link carries, where only the freshest reading matters.
+- **Throughput:** the link carries about five 31-byte payloads a second each way. Lossless delivery only holds while the *average* message rate stays below that; the queue covers bursts, not a sustained overload. Above it, use `latest_only`: the ground then sees each hub's latest reading, at most about half a second old.
 
 Per packet, the hopping layer adds 6 bytes (network ID, flags, 4-byte hop sync) and the hub format adds 1 byte plus 1 byte per sensor. A 10-sensor message is 37 bytes on air, 20 of them readings.
 

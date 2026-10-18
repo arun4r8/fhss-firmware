@@ -196,22 +196,120 @@ static void test_long_message_chunks(void)
     }
     CHECK(ok && seen == 39, "payloads do not carry the message in order (saw %u)", seen);
 
-    /* radio refuses partway: stop, count it, don't retry the rest */
+    /* radio refuses partway: stop and count it, then resume from the
+     * refused payload once the radio takes it, so nothing is lost */
     can_bridge_init(&b, &c);
     r.n = 0;
     r.refuse_after = 2;
     feed(&b, 0x109, &m, 0);
-    can_bridge_poll(&b);
+    CHECK(!can_bridge_poll(&b), "a part-sent message reported as sent");
     CHECK(r.n == 2 && b.stats.radio_refused == 1 && b.stats.chunks_sent == 2,
           "refusal: %d sent, %u refused", r.n, b.stats.radio_refused);
+    CHECK(b.stats.messages_sent == 0, "counted as sent before it was");
+    r.refuse_after = -1;
+    CHECK(can_bridge_poll(&b), "resume did not finish the message");
+    CHECK(r.n == 4 && b.stats.chunks_sent == 4 && b.stats.messages_sent == 1,
+          "resume: %d payloads, %u sent", r.n, b.stats.messages_sent);
+    seen = 0;
+    ok = true;
+    for (int i = 0; i < r.n; i++) {
+        ok &= can_msg_decode(r.data[i], r.len[i], &part);
+        for (uint8_t k = 0; ok && k < part.count; k++) {
+            ok &= part.sensor[k].reading == m.sensor[seen + k].reading;
+        }
+        seen = (uint8_t)(seen + part.count);
+    }
+    CHECK(ok && seen == 39, "resumed payloads skip or repeat sensors (saw %u)", seen);
+}
+
+static void test_lossless_queue(void)
+{
+    printf("default: every message queued and sent in order, overflow counted\n");
+    static can_bridge_t b;
+    radio_t r;
+    can_bridge_config_t c = config(&r);
+    can_bridge_init(&b, &c);
+
+    /* hub A sends 5 updates and hub B 1 while the radio is busy: all 6 wait */
+    r.busy = true;
+    for (uint16_t k = 0; k < 5; k++) {
+        can_hub_msg_t a = sample(1, 3, (uint16_t)(100 * k));
+        feed(&b, 0x101, &a, k * 10u);
+    }
+    can_hub_msg_t hb = sample(2, 2, 5555);
+    feed(&b, 0x102, &hb, 60);
+    CHECK(b.stats.messages_in == 6 && b.stats.superseded == 0 && b.stats.queue_peak == 6,
+          "in %u superseded %u peak %u", b.stats.messages_in, b.stats.superseded,
+          b.stats.queue_peak);
+    CHECK(!can_bridge_poll(&b) && r.n == 0, "sent while the radio was busy");
+
+    r.busy = false;
+    while (can_bridge_poll(&b)) {
+    }
+    CHECK(r.n == 6 && b.stats.messages_sent == 6, "%d of 6 sent", r.n);
+    bool ok = true;
+    can_hub_msg_t got;
+    for (uint16_t k = 0; k < 5; k++) {
+        can_hub_msg_t a = sample(1, 3, (uint16_t)(100 * k));
+        ok &= can_msg_decode(r.data[k], r.len[k], &got) && same(&got, &a);
+    }
+    ok &= can_msg_decode(r.data[5], r.len[5], &got) && same(&got, &hb);
+    CHECK(ok, "messages out of arrival order, or altered");
+
+    /* fill the queue past capacity: the extra is dropped and counted */
+    can_bridge_init(&b, &c);
+    r.n = 0;
+    r.busy = true;
+    can_hub_msg_t m = sample(3, 2, 7);
+    for (int k = 0; k < CAN_BRIDGE_QUEUE_LEN + 3; k++) {
+        feed(&b, 0x103, &m, (uint32_t)k * 10u);
+    }
+    CHECK(b.stats.messages_in == CAN_BRIDGE_QUEUE_LEN + 3 && b.stats.queue_full == 3,
+          "in %u queue_full %u", b.stats.messages_in, b.stats.queue_full);
+    r.busy = false;
+    while (can_bridge_poll(&b)) {
+        if (r.n == 64) {
+            r.n = 0;
+        }
+    }
+    CHECK(b.stats.messages_sent + b.stats.queue_full == b.stats.messages_in,
+          "books do not balance: sent %u + dropped %u != in %u", b.stats.messages_sent,
+          b.stats.queue_full, b.stats.messages_in);
+}
+
+static void test_latest_only_keeps_partial_head(void)
+{
+    printf("latest_only never rewrites a message that is partly on air\n");
+    static can_bridge_t b;
+    radio_t r;
+    can_bridge_config_t c = config(&r);
+    c.latest_only = true;
+    can_bridge_init(&b, &c);
+    can_hub_msg_t old = sample(9, 39, 1000), fresh = sample(9, 39, 2000), part;
+    feed(&b, 0x109, &old, 0);
+    r.refuse_after = 2;
+    can_bridge_poll(&b); /* 2 of 4 payloads of `old` go out */
+    feed(&b, 0x109, &fresh, 100);
+    CHECK(b.stats.superseded == 0, "replaced a message already partly sent");
+    r.refuse_after = -1;
+    while (can_bridge_poll(&b)) {
+    }
+    /* old's 4 payloads, then fresh's 4 */
+    CHECK(r.n == 8 && b.stats.messages_sent == 2, "%d payloads, %u sent", r.n,
+          b.stats.messages_sent);
+    bool ok = can_msg_decode(r.data[2], r.len[2], &part) &&
+              part.sensor[0].reading == old.sensor[20].reading; /* 10 sensors per payload */
+    ok &= can_msg_decode(r.data[4], r.len[4], &part) && part.sensor[0].reading == fresh.sensor[0].reading;
+    CHECK(ok, "payloads from the two messages were mixed");
 }
 
 static void test_freshest_wins_round_robin(void)
 {
-    printf("slow radio: newest message per sender, senders take turns\n");
+    printf("latest_only: newest message per sender, senders take turns\n");
     static can_bridge_t b;
     radio_t r;
     can_bridge_config_t c = config(&r);
+    c.latest_only = true;
     can_bridge_init(&b, &c);
 
     /* hub A sends 5 updates while the radio is busy, hub B sends 1 */
@@ -301,16 +399,17 @@ static void test_slots(void)
     for (uint16_t id = 0; id < CAN_BRIDGE_MAX_SENDERS + 2; id++) {
         feed(&b, id, &m, 0);
     }
-    /* all slots hold unsent messages: the two extra senders are dropped */
-    CHECK(b.stats.messages_in == CAN_BRIDGE_MAX_SENDERS && b.stats.no_slot == 2,
+    /* a finished message moves to the queue and frees its slot, so more
+     * senders than slots all get through, as long as they are not all
+     * mid-message at the same moment */
+    CHECK(b.stats.messages_in == CAN_BRIDGE_MAX_SENDERS + 2 && b.stats.no_slot == 0,
           "in %u no_slot %u", b.stats.messages_in, b.stats.no_slot);
     while (can_bridge_poll(&b)) {
     }
-    CHECK(r.n == CAN_BRIDGE_MAX_SENDERS, "sent %d", r.n);
-    /* once sent, the slots are free for new senders */
+    CHECK(r.n == CAN_BRIDGE_MAX_SENDERS + 2, "sent %d", r.n);
     feed(&b, 0x300, &m, 100);
     feed(&b, 0x301, &m, 100);
-    CHECK(b.stats.messages_in == CAN_BRIDGE_MAX_SENDERS + 2, "freed slots not reused");
+    CHECK(b.stats.messages_in == CAN_BRIDGE_MAX_SENDERS + 4, "slots not reused");
 
     /* a sender stuck mid-message holds its slot only until the timeout */
     can_bridge_init(&b, &c);
@@ -332,6 +431,8 @@ int main(void)
     test_one_message();
     test_filter_and_bad_payloads();
     test_long_message_chunks();
+    test_lossless_queue();
+    test_latest_only_keeps_partial_head();
     test_freshest_wins_round_robin();
     test_interleaved_senders();
     test_slots();
