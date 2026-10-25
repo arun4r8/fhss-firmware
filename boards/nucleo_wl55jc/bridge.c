@@ -198,10 +198,18 @@ static void print_status(void)
         uart_put_int((int32_t)b->messages_sent);
         uart_puts(" (");
         uart_put_int((int32_t)b->chunks_sent);
-        uart_puts(" pkts), replaced by newer ");
+        uart_puts(" pkts), queued ");
+        uart_put_int((int32_t)bridge.q_count);
+        uart_puts(" (peak ");
+        uart_put_int((int32_t)b->queue_peak);
+        uart_puts("), dropped: queue full ");
+        uart_put_int((int32_t)b->queue_full);
+        uart_puts(", replaced by newer ");
         uart_put_int((int32_t)b->superseded);
         uart_puts(", errors ");
-        uart_put_int((int32_t)(b->reasm_errors + b->no_slot + b->radio_refused));
+        uart_put_int((int32_t)(b->reasm_errors + b->no_slot));
+        uart_puts(", radio busy retries ");
+        uart_put_int((int32_t)b->radio_refused);
         uart_puts(", radio tx ");
         uart_put_int((int32_t)link.stats.tx_packets);
     } else {

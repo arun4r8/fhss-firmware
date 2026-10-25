@@ -26,8 +26,8 @@ static can_bridge_sender_t *find_sender(can_bridge_t *b, uint16_t id, uint32_t n
         if (s->used && s->id == id) {
             return s;
         }
-        /* an unused slot, or one with nothing worth keeping */
-        if (!free_slot && (!s->used || (!s->pending && !reasm_active(s, now_ms)))) {
+        /* an unused slot, or one not in the middle of a message */
+        if (!free_slot && (!s->used || !reasm_active(s, now_ms))) {
             free_slot = s;
         }
     }
@@ -37,6 +37,42 @@ static can_bridge_sender_t *find_sender(can_bridge_t *b, uint16_t id, uint32_t n
         free_slot->id = id;
     }
     return free_slot;
+}
+
+static can_bridge_msg_t *queue_at(can_bridge_t *b, uint8_t i)
+{
+    return &b->queue[(b->q_head + i) % CAN_BRIDGE_QUEUE_LEN];
+}
+
+static void enqueue(can_bridge_t *b, uint16_t id, const uint8_t *msg, size_t len)
+{
+    if (b->cfg.latest_only) {
+        /* Replace this sender's waiting message, if it has one. Never the
+         * head once it is partly sent: its remaining payloads must match
+         * the ones already on air. */
+        uint8_t first = b->q_pos ? 1u : 0u;
+        for (uint8_t i = first; i < b->q_count; i++) {
+            can_bridge_msg_t *q = queue_at(b, i);
+            if (q->id == id) {
+                memcpy(q->msg, msg, len);
+                q->len = len;
+                b->stats.superseded++;
+                return;
+            }
+        }
+    }
+    if (b->q_count == CAN_BRIDGE_QUEUE_LEN) {
+        b->stats.queue_full++;
+        return;
+    }
+    can_bridge_msg_t *q = queue_at(b, b->q_count);
+    q->id = id;
+    memcpy(q->msg, msg, len);
+    q->len = len;
+    b->q_count++;
+    if (b->q_count > b->stats.queue_peak) {
+        b->stats.queue_peak = b->q_count;
+    }
 }
 
 void can_bridge_on_frame(can_bridge_t *b, uint16_t id, const uint8_t *data, uint8_t dlc,
@@ -60,43 +96,33 @@ void can_bridge_on_frame(can_bridge_t *b, uint16_t id, const uint8_t *data, uint
         break;
     case CAN_REASM_DONE:
         b->stats.messages_in++;
-        if (s->pending) {
-            b->stats.superseded++;
-        }
-        memcpy(s->msg, s->reasm.buf, s->reasm.len);
-        s->msg_len = s->reasm.len;
-        s->pending = true;
+        enqueue(b, id, s->reasm.buf, s->reasm.len);
         break;
     }
 }
 
 bool can_bridge_poll(can_bridge_t *b)
 {
-    if (!b->cfg.radio_idle(b->cfg.user)) {
+    if (b->q_count == 0 || !b->cfg.radio_idle(b->cfg.user)) {
         return false;
     }
-    for (int n = 0; n < CAN_BRIDGE_MAX_SENDERS; n++) {
-        int i = (b->next_sender + n) % CAN_BRIDGE_MAX_SENDERS;
-        can_bridge_sender_t *s = &b->sender[i];
-        if (!s->pending) {
-            continue;
+    const can_bridge_msg_t *q = queue_at(b, 0);
+    uint8_t chunk[CAN_MSG_MAX_BYTES];
+    size_t pos = b->q_pos, n_bytes;
+    while ((n_bytes = can_msg_rf_chunk(q->msg, q->len, &pos, chunk, b->cfg.max_payload)) > 0) {
+        if (!b->cfg.radio_send(b->cfg.user, chunk, (uint8_t)n_bytes)) {
+            /* keep q_pos at this payload: the next poll sends it again */
+            b->stats.radio_refused++;
+            return false;
         }
-        s->pending = false;
-        b->next_sender = (uint8_t)((i + 1) % CAN_BRIDGE_MAX_SENDERS);
-
-        uint8_t chunk[CAN_MSG_MAX_BYTES];
-        size_t pos = 0, n_bytes;
-        while ((n_bytes = can_msg_rf_chunk(s->msg, s->msg_len, &pos, chunk, b->cfg.max_payload)) > 0) {
-            if (!b->cfg.radio_send(b->cfg.user, chunk, (uint8_t)n_bytes)) {
-                b->stats.radio_refused++;
-                break;
-            }
-            b->stats.chunks_sent++;
-        }
-        b->stats.messages_sent++;
-        return true;
+        b->q_pos = pos;
+        b->stats.chunks_sent++;
     }
-    return false;
+    b->q_pos = 0;
+    b->q_head = (uint8_t)((b->q_head + 1u) % CAN_BRIDGE_QUEUE_LEN);
+    b->q_count--;
+    b->stats.messages_sent++;
+    return true;
 }
 
 uint8_t can_bridge_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_t len,
