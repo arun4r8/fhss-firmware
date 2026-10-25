@@ -7,6 +7,11 @@
 #   make bridge ROLE=pod DEMO=1  build build/bridge-demo.bin (one board, no CAN bus)
 #   make flash [APP=bridge ROLE=... DEMO=1]
 #                                copy it onto the Nucleo's USB drive (drag-and-drop)
+#   make flash-swd [APP=... SERIAL=...]
+#                                flash over the ST-LINK debug link with OpenOCD
+#                                (brew install open-ocd): works when the USB drive
+#                                is blocked or the old firmware won't let go.
+#                                SERIAL picks one board when several are plugged in.
 #   make monitor                 open the board's serial console (Ctrl-A then K to quit)
 
 PREFIX  ?= arm-none-eabi-
@@ -54,7 +59,7 @@ BRIDGE_SRCS := bridge.c $(ROOT)/src/can_bridge.c $(ROOT)/src/can_msg.c
 APP ?= selftest
 FLASH_BIN := $(BUILD)/$(if $(filter bridge,$(APP)),$(BRIDGE_NAME),selftest).bin
 
-.PHONY: all bridge bridges flash monitor clean
+.PHONY: all bridge bridges flash flash-swd monitor clean
 
 all: $(BUILD)/selftest.bin
 
@@ -84,6 +89,10 @@ flash: $(FLASH_BIN)
 	@vol=$$(ls -d /Volumes/NOD_* 2>/dev/null | head -1); \
 	if [ -z "$$vol" ]; then echo "Nucleo USB drive (/Volumes/NOD_...) not found. Is the board plugged in?"; exit 1; fi; \
 	echo "flashing via $$vol"; cp $< "$$vol/" && sync && echo "done: the board resets and runs the new firmware"
+
+flash-swd: $(FLASH_BIN)
+	openocd -f interface/stlink.cfg $(if $(SERIAL),-c "adapter serial $(SERIAL)") \
+		-f target/stm32wlx.cfg -c "program $(FLASH_BIN:.bin=.elf) verify reset exit"
 
 monitor:
 	@port=$$(ls /dev/cu.usbmodem* 2>/dev/null | head -1); \
