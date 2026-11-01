@@ -448,6 +448,8 @@ typedef struct {
     int got[16];           /* messages received per hub */
     int bad;               /* payloads that failed to decode or verify */
     uint32_t max_age_ms;   /* oldest reading delivered */
+    uint16_t last_reading[16];
+    int out_of_order;      /* a hub's reading arrived older than the last one */
 } bridge_node_t;
 
 static bool bridge_radio_idle(void *user)
@@ -481,6 +483,10 @@ static void bridge_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t r
     }
     uint32_t age = emu_now_ms - 10u * m.sensor[0].reading;
     n->max_age_ms = age > n->max_age_ms ? age : n->max_age_ms;
+    if (n->got[m.hub & 15] > 0 && m.sensor[0].reading <= n->last_reading[m.hub & 15]) {
+        n->out_of_order++;
+    }
+    n->last_reading[m.hub & 15] = m.sensor[0].reading;
     n->got[m.hub & 15]++;
 }
 
@@ -522,9 +528,11 @@ static void test_can_bridge_over_link(void)
     emu_add_radio(&ea, 0);
     emu_add_radio(&eb, 1);
 
+    /* 40 messages a second against a link that carries about 5: more than
+     * any buffer can deliver, so this is the latest_only case. */
     can_bridge_config_t bc = {
         .rx_id_mask = 0x7F0, .rx_id_match = 0x100, .tx_id_base = 0x200,
-        .max_payload = FHSS_LINK_MAX_PAYLOAD,
+        .max_payload = FHSS_LINK_MAX_PAYLOAD, .latest_only = true,
         .radio_idle = bridge_radio_idle, .radio_send = bridge_radio_send,
     };
     bc.user = &pod;
@@ -580,6 +588,121 @@ static void test_can_bridge_over_link(void)
     NO_VIOLATIONS(&eb);
 }
 
+/* Hubs 3 and 6 take turns, one 10-sensor message every SLOW_PERIOD_MS between
+ * them: about 3.3 a second, inside what the link carries. Only runs between
+ * slow_start_ms and slow_stop_ms, so it starts once the ground is locked and
+ * stops early enough for the queue to drain. */
+#define SLOW_PERIOD_MS 300u
+#define BURST_MSGS 12          /* sent all at once, 10 s into the traffic */
+static uint32_t slow_next_ms, slow_start_ms, slow_stop_ms;
+static int slow_msgs;
+static bool burst_done;
+
+static void emit_hub_msg(bridge_node_t *pod, uint8_t hub, uint16_t reading)
+{
+    can_hub_msg_t m = {.hub = hub, .count = 10};
+    for (uint8_t i = 0; i < 10; i++) {
+        m.sensor[i] = (can_sensor_t){.type = 1, .id = i, .reading = reading};
+    }
+    uint8_t buf[CAN_MSG_MAX_BYTES], data[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
+    uint8_t nf = can_msg_to_frames(buf, can_msg_encode(&m, buf, sizeof(buf)), data, dlc);
+    for (uint8_t f = 0; f < nf; f++) {
+        can_bridge_on_frame(&pod->bridge, (uint16_t)(0x100 + hub), data[f], dlc[f], emu_now_ms);
+    }
+    slow_msgs++;
+}
+
+static void slow_hub_traffic(void *user)
+{
+    bridge_node_t *pod = user;
+    if (!slow_start_ms) {
+        return;
+    }
+    if (slow_next_ms < slow_start_ms) {
+        slow_next_ms = slow_start_ms;
+    }
+    for (; slow_next_ms <= emu_now_ms && slow_next_ms < slow_stop_ms; slow_next_ms += SLOW_PERIOD_MS) {
+        emit_hub_msg(pod, (slow_next_ms / SLOW_PERIOD_MS) % 2 ? 3 : 6, (uint16_t)(slow_next_ms / 10));
+        /* A burst, as when the VCU reads every hub back to back: far more
+         * than the link carries at that moment, so it must wait in the
+         * queue. Readings step 10 ms apart after this message's, so each
+         * hub's readings still only go up. */
+        if (!burst_done && slow_next_ms >= slow_start_ms + 10000) {
+            burst_done = true;
+            for (uint16_t k = 1; k <= BURST_MSGS; k++) {
+                emit_hub_msg(pod, k % 2 ? 3 : 6, (uint16_t)(slow_next_ms / 10 + k));
+            }
+        }
+    }
+}
+
+static void test_can_bridge_lossless_over_link(void)
+{
+    printf("CAN bridge, default mode: traffic the link can carry arrives complete (60 s)\n");
+    emu_reset_world();
+    static sx1262_emu_t ea, eb;
+    static fhss_link_t pod_link, gnd_link;
+    static bridge_node_t pod, gnd;
+    memset(&pod, 0, sizeof(pod));
+    memset(&gnd, 0, sizeof(gnd));
+    pod.link = &pod_link;
+    gnd.link = &gnd_link;
+    emu_add_radio(&ea, 0);
+    emu_add_radio(&eb, 1);
+
+    can_bridge_config_t bc = {
+        .rx_id_mask = 0x7F0, .rx_id_match = 0x100, .tx_id_base = 0x200,
+        .max_payload = FHSS_LINK_MAX_PAYLOAD,
+        .radio_idle = bridge_radio_idle, .radio_send = bridge_radio_send,
+    };
+    bc.user = &pod;
+    CHECK(can_bridge_init(&pod.bridge, &bc), "pod bridge init");
+    bc.user = &gnd;
+    CHECK(can_bridge_init(&gnd.bridge, &bc), "ground bridge init");
+
+    fhss_link_config_t pc = link_cfg(&ea, true, NULL), gc = link_cfg(&eb, false, NULL);
+    pc.on_rx = bridge_on_rx;
+    pc.user = &pod;
+    pc.tx_wait_hook = slow_hub_traffic;
+    gc.on_rx = bridge_on_rx;
+    gc.user = &gnd;
+    CHECK(fhss_link_init(&pod_link, &pc) == FHSS_LINK_OK, "pod link init");
+    CHECK(fhss_link_init(&gnd_link, &gc) == FHSS_LINK_OK, "ground link init");
+
+    slow_next_ms = slow_start_ms = 0;
+    slow_stop_ms = 50000;
+    slow_msgs = 0;
+    burst_done = false;
+    while (emu_now_ms < 60000) {
+        if (!slow_start_ms && fhss_link_locked(&gnd_link)) {
+            slow_start_ms = emu_now_ms + 1000; /* traffic starts once locked */
+        }
+        slow_hub_traffic(&pod);
+        can_bridge_poll(&pod.bridge);
+        fhss_link_poll(&pod_link);
+        fhss_link_poll(&gnd_link);
+        emu_now_ms++;
+    }
+    const can_bridge_stats_t *s = &pod.bridge.stats;
+    int delivered = gnd.got[3] + gnd.got[6];
+    printf("  %d hub messages on CAN, %u sent, %d delivered, queue peak %u, "
+           "oldest reading %u ms\n",
+           slow_msgs, s->messages_sent, delivered, s->queue_peak, gnd.max_age_ms);
+    CHECK(slow_start_ms, "ground never locked");
+    CHECK(slow_msgs >= 100 && burst_done, "only %d messages generated", slow_msgs);
+    CHECK(s->queue_peak >= BURST_MSGS / 2, "the burst never queued (peak %u)", s->queue_peak);
+    CHECK(s->messages_in == (uint32_t)slow_msgs && s->reasm_errors == 0 && s->no_slot == 0,
+          "pod reassembled %u of %d", s->messages_in, slow_msgs);
+    CHECK(s->queue_full == 0 && s->superseded == 0, "dropped %u, replaced %u", s->queue_full,
+          s->superseded);
+    CHECK(delivered == slow_msgs, "every message must arrive: %d of %d", delivered, slow_msgs);
+    CHECK(gnd.bad == 0 && gnd.out_of_order == 0, "%d bad, %d out of order", gnd.bad,
+          gnd.out_of_order);
+    CHECK(pod_link.stats.tx_dropped == 0, "radio queue overflowed");
+    NO_VIOLATIONS(&ea);
+    NO_VIOLATIONS(&eb);
+}
+
 int main(void)
 {
     test_freq_and_airtime();
@@ -591,6 +714,7 @@ int main(void)
     test_link_max_payload();
     test_foreign_network_ignored();
     test_can_bridge_over_link();
+    test_can_bridge_lossless_over_link();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
