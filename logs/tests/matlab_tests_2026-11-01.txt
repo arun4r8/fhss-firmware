@@ -1,0 +1,2 @@
+27 sequences checked against the firmware, 0 failures
+hop tools: 0 failures (plot saved to test_hop_plot.png)

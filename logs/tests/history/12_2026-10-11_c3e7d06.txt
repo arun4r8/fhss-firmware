@@ -1,0 +1,66 @@
+for f in ports/nucleo_sx1262/sx1262.c ports/nucleo_sx1262/fhss_link.c; do \
+		cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -DFHSS_HAL_HEADER='"mock_hal.h"' -Iports/nucleo_sx1262 -Itests/mocks -fsyntax-only $f || exit 1; \
+	done
+touch build/port.stamp
+cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -Wno-conversion -fsanitize=address,undefined -g -DFHSS_HAL_HEADER='"mock_hal.h"' -Iports/nucleo_sx1262 -Itests/mocks \
+		src/fhss.c ports/nucleo_sx1262/sx1262.c ports/nucleo_sx1262/fhss_link.c tests/mocks/sx1262_emu.c src/can_bridge.c src/can_msg.c tests/test_port_sx1262.c -o build/test_port
+cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -Wno-conversion -fsanitize=address,undefined -g src/can_bridge.c src/can_msg.c tests/test_can_bridge.c -o build/test_can_bridge
+./build/test_fhss
+sequence is a permutation (1000 seeds)
+same seed -> same sequence, different seed -> different
+leader: 400 ms dwell, no revisit within 20 s, equal use (10 min)
+leader with 64 channels
+any 20 s window: <= 400 ms on each channel
+hop position -> channel is uniform across seeds (chi-square)
+config validation
+millisecond clock wraparound
+late ticks do not drift the schedule
+follower acquires, tracks, loses and reacquires leader
+follower returns to search after max_missed_hops
+malformed sync rejected
+no transmit within guard time of a hop
+
+64641 checks, 0 failures
+./build/test_port
+RF frequency word and LoRa airtime
+init configures the chip in a legal order
+init diagnoses missing chip, stuck BUSY, clock mismatch, auto-detects clock
+send / receive / retune while listening
+bring-up checks: PLL lock on all 50 channels, RSSI, PLL failure
+leader + follower over emulated air (3 min, with 3 s outage)
+  follower locked at 20062 ms (boot 1234), relocked at 100062 ms (outage end 93000)
+  leader->follower 150/178 delivered, follower->leader 148/150 delivered
+  locked 151084 ms total, out of step in 0 of 129169 samples, 600 transmissions checked
+max-size payloads (31 B) back to back: every packet inside one dwell
+  900 packets on air, leader->follower 450, follower->leader 450 over 89 s locked
+packets with another net_id are ignored
+CAN bridge: two hubs on the pod's bus -> hopping link -> ground (60 s)
+  2400 hub messages on CAN, 301 handed to radio, 300 delivered over 59 s locked (hub 3: 151, hub 6: 149), oldest reading 333 ms
+
+1878 checks, 0 failures
+./build/test_can_msg
+document example: 10 sensors -> 31 bytes -> 4 CAN frames
+record bit layout: err | type:2 | unused | id:4
+rejects bad messages
+CAN frames -> reassembled message, for 0..39 sensors
+reassembly recovers from a lost frame via timeout
+radio payloads: whole records, each chunk decodes on its own
+
+445 checks, 0 failures
+./build/test_can_bridge
+config validation
+10-sensor message: CAN frames in, one radio payload out, CAN frames back
+ID filter and invalid radio payloads
+39-sensor message (15 CAN frames) -> 4 radio payloads
+slow radio: newest message per sender, senders take turns
+two hubs interleaving frames on the bus
+more senders than slots; idle slots are reused
+
+35 checks, 0 failures
+./build/test_mcp2515
+bit timing: known values and every reachable combination
+init: presence check, registers, error cases
+loopback: frame sent comes back intact (single-board self-test path)
+bus: two nodes exchange frames; lone node fails cleanly; filters; rollover
+
+75 checks, 0 failures

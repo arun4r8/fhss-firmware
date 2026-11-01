@@ -1,0 +1,20 @@
+mkdir -p build
+cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -c src/fhss.c -o build/fhss.o
+cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -Wno-conversion -fsanitize=address,undefined -g \
+		src/fhss.c tests/test_fhss.c -o build/test_fhss
+./build/test_fhss
+sequence is a permutation (1000 seeds)
+same seed -> same sequence, different seed -> different
+leader: 400 ms dwell, no revisit within 20 s, equal use (10 min)
+leader with 64 channels
+any 20 s window: <= 400 ms on each channel
+hop position -> channel is uniform across seeds (chi-square)
+config validation
+millisecond clock wraparound
+late ticks do not drift the schedule
+follower acquires, tracks, loses and reacquires leader
+follower returns to search after max_missed_hops
+malformed sync rejected
+no transmit within guard time of a hop
+
+64641 checks, 0 failures

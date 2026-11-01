@@ -1,0 +1,29 @@
+make: Nothing to be done for `all'.
+/Applications/Xcode.app/Contents/Developer/usr/bin/make bridge ROLE=pod
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=soft -Os -g -std=c99 -Wall -Wextra -Werror -ffreestanding -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns -DCORE_CM4 -DSTM32WL55xx -DFHSS_HAL_HEADER='"hal_shim.h"' -I. -Ilibc -I../../include -I../../ports/nucleo_sx1262 -I../../drivers/mcp2515 -I../../third_party/cmsis_core -I../../third_party/cmsis_device_wl -DBRIDGE_ROLE=1 startup.c board.c hal_shim.c libc_min.c ../../src/fhss.c ../../ports/nucleo_sx1262/sx1262.c ../../ports/nucleo_sx1262/fhss_link.c ../../drivers/mcp2515/mcp2515.c bridge.c ../../src/can_bridge.c ../../src/can_msg.c -T stm32wl55jc_cm4.ld -nostdlib -Wl,--gc-sections \
+		-Wl,-Map=build/bridge-pod.map -lgcc -o build/bridge-pod.elf
+arm-none-eabi-size build/bridge-pod.elf
+   text	   data	    bss	    dec	    hex	filename
+   8604	     36	   2776	  11416	   2c98	build/bridge-pod.elf
+arm-none-eabi-objcopy -O binary build/bridge-pod.elf build/bridge-pod.bin
+/Applications/Xcode.app/Contents/Developer/usr/bin/make bridge ROLE=ground
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=soft -Os -g -std=c99 -Wall -Wextra -Werror -ffreestanding -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns -DCORE_CM4 -DSTM32WL55xx -DFHSS_HAL_HEADER='"hal_shim.h"' -I. -Ilibc -I../../include -I../../ports/nucleo_sx1262 -I../../drivers/mcp2515 -I../../third_party/cmsis_core -I../../third_party/cmsis_device_wl -DBRIDGE_ROLE=2 startup.c board.c hal_shim.c libc_min.c ../../src/fhss.c ../../ports/nucleo_sx1262/sx1262.c ../../ports/nucleo_sx1262/fhss_link.c ../../drivers/mcp2515/mcp2515.c bridge.c ../../src/can_bridge.c ../../src/can_msg.c -T stm32wl55jc_cm4.ld -nostdlib -Wl,--gc-sections \
+		-Wl,-Map=build/bridge-ground.map -lgcc -o build/bridge-ground.elf
+arm-none-eabi-size build/bridge-ground.elf
+   text	   data	    bss	    dec	    hex	filename
+   8544	     36	   3016	  11596	   2d4c	build/bridge-ground.elf
+arm-none-eabi-objcopy -O binary build/bridge-ground.elf build/bridge-ground.bin
+/Applications/Xcode.app/Contents/Developer/usr/bin/make bridge ROLE=pod DEMO=1
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=soft -Os -g -std=c99 -Wall -Wextra -Werror -ffreestanding -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns -DCORE_CM4 -DSTM32WL55xx -DFHSS_HAL_HEADER='"hal_shim.h"' -I. -Ilibc -I../../include -I../../ports/nucleo_sx1262 -I../../drivers/mcp2515 -I../../third_party/cmsis_core -I../../third_party/cmsis_device_wl -DBRIDGE_ROLE=1 -DBRIDGE_DEMO=1 startup.c board.c hal_shim.c libc_min.c ../../src/fhss.c ../../ports/nucleo_sx1262/sx1262.c ../../ports/nucleo_sx1262/fhss_link.c ../../drivers/mcp2515/mcp2515.c bridge.c ../../src/can_bridge.c ../../src/can_msg.c -T stm32wl55jc_cm4.ld -nostdlib -Wl,--gc-sections \
+		-Wl,-Map=build/bridge-demo.map -lgcc -o build/bridge-demo.elf
+arm-none-eabi-size build/bridge-demo.elf
+   text	   data	    bss	    dec	    hex	filename
+   9320	     36	   2788	  12144	   2f70	build/bridge-demo.elf
+arm-none-eabi-objcopy -O binary build/bridge-demo.elf build/bridge-demo.bin
+/Applications/Xcode.app/Contents/Developer/usr/bin/make bridge ROLE=ground HUB=1
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=soft -Os -g -std=c99 -Wall -Wextra -Werror -ffreestanding -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns -DCORE_CM4 -DSTM32WL55xx -DFHSS_HAL_HEADER='"hal_shim.h"' -I. -Ilibc -I../../include -I../../ports/nucleo_sx1262 -I../../drivers/mcp2515 -I../../third_party/cmsis_core -I../../third_party/cmsis_device_wl -DBRIDGE_ROLE=2 -DBRIDGE_HUB=1 startup.c board.c hal_shim.c libc_min.c ../../src/fhss.c ../../ports/nucleo_sx1262/sx1262.c ../../ports/nucleo_sx1262/fhss_link.c ../../drivers/mcp2515/mcp2515.c bridge.c ../../src/can_bridge.c ../../src/can_msg.c -T stm32wl55jc_cm4.ld -nostdlib -Wl,--gc-sections \
+		-Wl,-Map=build/bridge-ground-hub.map -lgcc -o build/bridge-ground-hub.elf
+arm-none-eabi-size build/bridge-ground-hub.elf
+   text	   data	    bss	    dec	    hex	filename
+   8880	     36	   3024	  11940	   2ea4	build/bridge-ground-hub.elf
+arm-none-eabi-objcopy -O binary build/bridge-ground-hub.elf build/bridge-ground-hub.bin

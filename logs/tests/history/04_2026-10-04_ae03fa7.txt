@@ -1,0 +1,35 @@
+for f in ports/nucleo_sx1262/sx1262.c ports/nucleo_sx1262/fhss_link.c; do \
+		cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -DFHSS_HAL_HEADER='"mock_hal.h"' -Iports/nucleo_sx1262 -Itests/mocks -fsyntax-only $f || exit 1; \
+	done
+touch build/port.stamp
+cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -Wno-conversion -fsanitize=address,undefined -g -DFHSS_HAL_HEADER='"mock_hal.h"' -Iports/nucleo_sx1262 -Itests/mocks \
+		src/fhss.c ports/nucleo_sx1262/sx1262.c ports/nucleo_sx1262/fhss_link.c tests/mocks/sx1262_emu.c tests/test_port_sx1262.c -o build/test_port
+./build/test_fhss
+sequence is a permutation (1000 seeds)
+same seed -> same sequence, different seed -> different
+leader: 400 ms dwell, no revisit within 20 s, equal use (10 min)
+leader with 64 channels
+any 20 s window: <= 400 ms on each channel
+hop position -> channel is uniform across seeds (chi-square)
+config validation
+millisecond clock wraparound
+late ticks do not drift the schedule
+follower acquires, tracks, loses and reacquires leader
+follower returns to search after max_missed_hops
+malformed sync rejected
+no transmit within guard time of a hop
+
+64641 checks, 0 failures
+./build/test_port
+RF frequency word and LoRa airtime
+init configures the chip in a legal order
+init diagnoses missing chip, stuck BUSY, clock mismatch, auto-detects clock
+send / receive / retune while listening
+bring-up checks: PLL lock on all 50 channels, RSSI, PLL failure
+leader + follower over emulated air (3 min, with 3 s outage)
+  follower locked at 20062 ms (boot 1234), relocked at 100062 ms (outage end 93000)
+  leader->follower 150/178 delivered, follower->leader 148/150 delivered
+  locked 151084 ms total, out of step in 0 of 129169 samples, 600 transmissions checked
+packets with another net_id are ignored
+
+1859 checks, 0 failures

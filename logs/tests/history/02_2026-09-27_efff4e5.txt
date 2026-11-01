@@ -1,0 +1,34 @@
+for f in ports/stm32f446re_sx1276/sx1276.c ports/stm32f446re_sx1276/fhss_link.c; do \
+		cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -Iports/stm32f446re_sx1276 -Itests/mocks -fsyntax-only $f || exit 1; \
+	done
+touch build/port.stamp
+cc -std=c99 -O2 -Wall -Wextra -Wpedantic -Wconversion -Werror -Iinclude -Wno-conversion -fsanitize=address,undefined -g -Iports/stm32f446re_sx1276 -Itests/mocks \
+		src/fhss.c ports/stm32f446re_sx1276/sx1276.c ports/stm32f446re_sx1276/fhss_link.c tests/mocks/sx1276_emu.c tests/test_port_sx1276.c -o build/test_port
+./build/test_fhss
+sequence is a permutation (1000 seeds)
+same seed -> same sequence, different seed -> different
+leader: 400 ms dwell, no revisit within 20 s, equal use (10 min)
+leader with 64 channels
+any 20 s window: <= 400 ms on each channel
+hop position -> channel is uniform across seeds (chi-square)
+config validation
+millisecond clock wraparound
+late ticks do not drift the schedule
+follower acquires, tracks, loses and reacquires leader
+follower returns to search after max_missed_hops
+malformed sync rejected
+no transmit within guard time of a hop
+
+64641 checks, 0 failures
+./build/test_port
+FRF register math and LoRa airtime
+init programs LoRa registers
+init reports missing chip and bad config
+send / receive / retune while listening
+leader + follower over emulated air (3 min, with 3 s outage)
+  follower locked at 20063 ms (boot 1234), relocked at 100063 ms (outage end 93000)
+  leader->follower 150/178 delivered, follower->leader 148/150 delivered
+  locked 151083 ms total, out of step in 0 of 129167 samples, 600 transmissions checked
+packets with another net_id are ignored
+
+1834 checks, 0 failures
