@@ -5,6 +5,8 @@
 #   make bridge ROLE=pod         build build/bridge-pod.bin (CAN -> radio)
 #   make bridge ROLE=ground      build build/bridge-ground.bin (radio -> console/CAN)
 #   make bridge ROLE=pod DEMO=1  build build/bridge-demo.bin (one board, no CAN bus)
+#   make bridge ROLE=ground HUB=1  build build/bridge-ground-hub.bin (real CAN bus test:
+#                                the ground board plays a hub; pair with ROLE=pod)
 #   make flash [APP=bridge ROLE=... DEMO=1]
 #                                copy it onto the Nucleo's USB drive (drag-and-drop)
 #   make flash-swd [APP=... SERIAL=...]
@@ -38,6 +40,7 @@ DEPS   := $(COMMON) $(wildcard *.h) $(wildcard libc/*.h) $(wildcard $(ROOT)/incl
 
 ROLE ?= pod
 DEMO ?= 0
+HUB ?= 0
 ifeq ($(ROLE),pod)
   BRIDGE_DEFS := -DBRIDGE_ROLE=1
 else ifeq ($(ROLE),ground)
@@ -51,6 +54,12 @@ ifeq ($(DEMO),1)
   endif
   BRIDGE_DEFS += -DBRIDGE_DEMO=1
   BRIDGE_NAME := bridge-demo
+else ifeq ($(HUB),1)
+  ifneq ($(ROLE),ground)
+    $(error HUB=1 only applies to ROLE=ground)
+  endif
+  BRIDGE_DEFS += -DBRIDGE_HUB=1
+  BRIDGE_NAME := bridge-ground-hub
 else
   BRIDGE_NAME := bridge-$(ROLE)
 endif
@@ -70,6 +79,7 @@ bridges:
 	$(MAKE) bridge ROLE=pod
 	$(MAKE) bridge ROLE=ground
 	$(MAKE) bridge ROLE=pod DEMO=1
+	$(MAKE) bridge ROLE=ground HUB=1
 
 $(BUILD)/selftest.elf: selftest.c $(DEPS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COMMON) selftest.c $(LDFLAGS) -Wl,-Map=$(BUILD)/selftest.map -lgcc -o $@

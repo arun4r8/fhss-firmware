@@ -14,6 +14,14 @@
  *                             single-board test: no CAN bus needed. Fake hub
  *                             messages go through the MCP2515 in loopback, so
  *                             reassembly, chunking and transmission all run.
+ *   make bridge ROLE=ground HUB=1
+ *                             real CAN bus test with two boards: the ground
+ *                             station's MCP2515 plays a hub on the bus (hub 5,
+ *                             ID 0x105, every 100 ms). The pod (plain ROLE=pod)
+ *                             picks the frames up through its transceiver and
+ *                             radios them back, so the ground prints what it
+ *                             put on the wires. Received messages are not
+ *                             re-sent on CAN in this mode, or they would loop.
  *
  * Console (ST-LINK virtual COM port, 115200 8N1): a status line every 5 s;
  * the ground station also prints every message it receives.
@@ -42,6 +50,9 @@
 #ifndef BRIDGE_DEMO
 #define BRIDGE_DEMO 0
 #endif
+#ifndef BRIDGE_HUB
+#define BRIDGE_HUB 0
+#endif
 
 /* Placeholders until the embedded team confirms them (README "Open
  * questions"): bus bit rate, which IDs carry hub messages, resend IDs. */
@@ -69,6 +80,7 @@ static mcp2515_t can = {
 };
 static int can_ok;
 static uint32_t can_tx_errors;
+static uint32_t hub_msgs_sent;
 
 static bool radio_idle(void *user)
 {
@@ -129,7 +141,7 @@ static void on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi_dbm
         return;
     }
     print_message(&m, rssi_dbm);
-    for (uint8_t i = 0; can_ok && i < n; i++) {
+    for (uint8_t i = 0; can_ok && !BRIDGE_HUB && i < n; i++) {
         can_frame_t f = {.id = id, .dlc = dlc[i]};
         memcpy(f.data, frames[i], dlc[i]);
         if (mcp2515_send(&can, &f) != MCP2515_OK) {
@@ -140,11 +152,13 @@ static void on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi_dbm
 }
 
 /* DEMO: a 10-sensor message from hub 3, readings counting up, sent as CAN
- * frames that the MCP2515 loops straight back to us. */
+ * frames that the MCP2515 loops straight back to us.
+ * HUB: the same from hub 5, sent onto the real bus for the pod to pick up. */
 static void demo_hub_message(void)
 {
     static uint16_t counter;
-    can_hub_msg_t m = {.hub = 3, .count = 10};
+    const uint8_t hub = BRIDGE_HUB ? 5 : 3;
+    can_hub_msg_t m = {.hub = hub, .count = 10};
     for (uint8_t i = 0; i < 10; i++) {
         m.sensor[i] = (can_sensor_t){.type = 1, .id = i, .reading = (uint16_t)(counter + i)};
     }
@@ -152,11 +166,17 @@ static void demo_hub_message(void)
     uint8_t buf[CAN_MSG_MAX_BYTES], data[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
     uint8_t n = can_msg_to_frames(buf, can_msg_encode(&m, buf, sizeof(buf)), data, dlc);
     for (uint8_t i = 0; i < n; i++) {
-        can_frame_t f = {.id = 0x103, .dlc = dlc[i]};
+        can_frame_t f = {.id = (uint16_t)(0x100 + hub), .dlc = dlc[i]};
         memcpy(f.data, data[i], dlc[i]);
-        mcp2515_send(&can, &f);
-        drain_can(NULL); /* loopback holds only 2 frames too */
+        if (mcp2515_send(&can, &f) != MCP2515_OK) {
+            can_tx_errors++; /* on a real bus: nobody ACKed (wiring, termination) */
+            return;
+        }
+        if (!BRIDGE_HUB) {
+            drain_can(NULL); /* loopback holds only 2 frames too */
+        }
     }
+    hub_msgs_sent++;
 }
 
 static void log_fields(const char *tag, uint32_t ms)
@@ -212,7 +232,12 @@ static void print_status(void)
         uart_put_int((int32_t)b->radio_bad);
         uart_puts(", crc errors ");
         uart_put_int((int32_t)link.stats.rx_crc_errors);
-        if (can_ok) {
+        if (can_ok && BRIDGE_HUB) {
+            uart_puts(", hub msgs put on CAN ");
+            uart_put_int((int32_t)hub_msgs_sent);
+            uart_puts(", CAN send failures ");
+            uart_put_int((int32_t)can_tx_errors);
+        } else if (can_ok) {
             uart_puts(", CAN resend errors ");
             uart_put_int((int32_t)can_tx_errors);
         }
@@ -236,7 +261,8 @@ int main(void)
     uart_puts(BRIDGE_ROLE == ROLE_POD
                   ? (BRIDGE_DEMO ? "\n=== CAN bridge: pod, DEMO (MCP2515 loopback, fake hub 3) ===\n"
                                  : "\n=== CAN bridge: pod (CAN -> radio, hopping leader) ===\n")
-                  : "\n=== CAN bridge: ground (radio -> console + CAN) ===\n");
+                  : (BRIDGE_HUB ? "\n=== CAN bridge: ground + fake hub 5 on the CAN bus ===\n"
+                                : "\n=== CAN bridge: ground (radio -> console + CAN) ===\n"));
 
     int err = mcp2515_init(&can);
     can_ok = err == MCP2515_OK;
@@ -297,6 +323,9 @@ int main(void)
             }
             drain_can(NULL);
             can_bridge_poll(&bridge);
+        } else if (BRIDGE_HUB && can_ok && (int32_t)(HAL_GetTick() - next_demo) >= 0) {
+            next_demo += DEMO_EVERY_MS;
+            demo_hub_message();
         }
         /* what the next transmission would carry, to log its length */
         uint8_t queued_len = link.q_count ? link.queue[link.q_head].len : 0;

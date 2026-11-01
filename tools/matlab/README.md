@@ -8,9 +8,19 @@ A time vs channel plot of what the boards actually do, checked against what the 
 | `read_hop_log.m` | Parses the bridge firmware's `CFG` / `HOP` / `TX` / `RX` log lines |
 | `hop_plot.m` | Draws the plot and runs the checks |
 | `hop_monitor.m` | Live plot from a board on USB; saves the capture |
+| `hop_demo.m` | Live demo with both boards: pod hops and transmits, ground follows and receives (default 15 s); saves a PNG |
 | `lora_airtime_ms.m` | Packet time on air, same formula as the firmware |
 | `test_fhss_sequence.m`, `test_hop_tools.m` | Tests (run both after any change) |
 | `gen_ref_sequences.c`, `ref_sequences.csv` | Reference sequences from the real C code; `make test` fails if they go stale |
+
+## 15-second live demo (both boards)
+
+Flash the pod with the demo build and the ground with the ground role, plug both in, close other serial windows, then in MATLAB:
+```matlab
+cd ~/Downloads/fhss-firmware/tools/matlab
+hop_demo          % or hop_demo(30) for 30 s
+```
+Grey steps are the pod's channel, blue bars its transmissions, red triangles packets the ground received, and orange circles the ground's own hops. The title counts hops, channels and delivery. Events are placed by the boards' own clocks, so the plot stays exact even if MATLAB lags.
 
 ## Live plot from a board
 

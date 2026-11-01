@@ -12,7 +12,8 @@ function hop_monitor(port, logfile)
 
     if nargin < 1 || strlength(port) == 0
         ports = serialportlist("available");
-        port = ports(contains(ports, "usbmodem") | startsWith(ports, "COM"));
+        % macOS lists each board twice (tty.* and cu.*, the same port): keep cu.*
+        port = ports(startsWith(ports, "/dev/cu.usbmodem") | startsWith(ports, "COM"));
         if isempty(port)
             error('No Nucleo serial port found. Is it plugged in, and is "make monitor" closed?');
         end

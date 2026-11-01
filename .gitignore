@@ -3,3 +3,4 @@ build/
 .DS_Store
 tools/matlab/test_hop_plot.png
 tools/matlab/hop_capture_*.txt
+tools/matlab/hop_demo_*.png
