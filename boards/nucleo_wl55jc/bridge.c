@@ -371,6 +371,26 @@ static void print_status(void)
     uart_puts("\n");
 }
 
+/* Link callbacks */
+static void on_tx_log(void *user, uint8_t len, uint32_t start_ms)
+{
+    (void)user;
+    if (HOP_LOG) {
+        log_fields("TX", start_ms);
+        uart_puts(",");
+        uart_put_int(len);
+        uart_puts("\n");
+    }
+}
+
+/* Pod: the link asks for a frame the moment its slot has room for one */
+static uint8_t pod_fill(void *user, uint8_t *buf, uint8_t max)
+{
+    (void)user;
+    drain_can(NULL);
+    return can_bridge_fill(&bridge, buf, max);
+}
+
 int main(void)
 {
     board_init();
@@ -419,6 +439,8 @@ int main(void)
         .bandwidth_hz = LINK_BANDWIDTH_HZ,
         .on_rx = BRIDGE_ROLE == ROLE_GROUND ? on_rx : pod_on_rx,
         .tx_wait_hook = BRIDGE_ROLE == ROLE_POD ? drain_can : NULL,
+        .fill = BRIDGE_ROLE == ROLE_POD ? pod_fill : NULL,
+        .on_tx = on_tx_log,
     };
     while (fhss_link_init(&link, &lc) != FHSS_LINK_OK) {
         uart_puts("radio init failed, error ");
@@ -437,7 +459,7 @@ int main(void)
     }
 
     uint16_t last_hop = link.fhss.hop_index;
-    uint32_t last_tx = 0, last_rx = 0;
+    uint32_t last_rx = 0;
     bool was_locked = fhss_link_locked(&link);
     uint32_t next_status = HAL_GetTick() + STATUS_EVERY_MS;
     uint32_t next_demo = HAL_GetTick() + DEMO_EVERY_MS;
@@ -447,8 +469,7 @@ int main(void)
                 next_demo += DEMO_EVERY_MS;
                 demo_hub_message();
             }
-            drain_can(NULL);
-            can_bridge_poll(&bridge);
+            drain_can(NULL); /* frames go out through pod_fill() */
         } else {
             if (BRIDGE_HUB && can_ok && (int32_t)(HAL_GetTick() - next_demo) >= 0) {
                 next_demo += HUB_EVERY_MS;
@@ -459,18 +480,8 @@ int main(void)
             }
         }
         /* what the next transmission would carry, to log its length */
-        uint8_t queued_len = link.q_count ? link.queue[link.q_head].len : 0;
         fhss_link_poll(&link);
 
-        if (HOP_LOG && link.stats.tx_packets != last_tx) {
-            last_tx = link.stats.tx_packets;
-            /* poll returns once the packet is sent: back-date to its start */
-            uint32_t air = sx1262_airtime_ms(&link.radio.cfg, (uint8_t)(FHSS_LINK_HEADER_LEN + queued_len));
-            log_fields("TX", HAL_GetTick() - air);
-            uart_puts(",");
-            uart_put_int(queued_len);
-            uart_puts("\n");
-        }
         if (HOP_LOG && link.stats.rx_packets != last_rx) {
             last_rx = link.stats.rx_packets;
             log_fields("RX", HAL_GetTick());

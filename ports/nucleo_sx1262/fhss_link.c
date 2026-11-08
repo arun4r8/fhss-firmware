@@ -12,6 +12,10 @@
 
 #define RETUNE_MARGIN_MS    5u  /* radio retune + SPI overhead */
 #define SLOT_MARGIN_MS      10u /* absorbs sync error between nodes */
+/* The leader's slot only needs a short margin at its end: the follower
+ * already waits SLOT_MARGIN_MS into its own slot, and this covers the
+ * radio finishing 2-3 ms after the calculated airtime (measured). */
+#define LEADER_END_MARGIN_MS 5u
 #define BEACON_LATE_MS      15u /* window at the end of the slot for a bare beacon */
 
 #define FLAG_FROM_LEADER    0x01
@@ -69,7 +73,8 @@ fhss_link_err_t fhss_link_init(fhss_link_t *l, const fhss_link_config_t *cfg)
     uint32_t slot = l->cfg.leader ? l->leader_slot_ms : (uint32_t)(dwell - l->leader_slot_ms);
     int max_len = -1;
     for (int n = 0; n <= FHSS_LINK_MAX_PAYLOAD; n++) {
-        if (sx1262_airtime_ms(&lora, (uint8_t)(FHSS_LINK_HEADER_LEN + n)) + 2u * SLOT_MARGIN_MS <= slot) {
+        uint32_t margins = SLOT_MARGIN_MS + (l->cfg.leader ? LEADER_END_MARGIN_MS : SLOT_MARGIN_MS);
+        if (sx1262_airtime_ms(&lora, (uint8_t)(FHSS_LINK_HEADER_LEN + n)) + margins <= slot) {
             max_len = n;
         }
     }
@@ -172,7 +177,7 @@ static bool in_my_slot(const fhss_link_t *l, uint32_t now, uint32_t airtime)
     if (l->cfg.leader) {
         /* Wait a little into the dwell so followers whose clocks run slightly
          * behind have already hopped when the packet starts. */
-        return into >= SLOT_MARGIN_MS && into + airtime + SLOT_MARGIN_MS <= split;
+        return into >= SLOT_MARGIN_MS && into + airtime + LEADER_END_MARGIN_MS <= split;
     }
     return into >= split + SLOT_MARGIN_MS && until_hop >= airtime + SLOT_MARGIN_MS;
 }
@@ -184,12 +189,23 @@ bool fhss_link_slot_open(const fhss_link_t *l, uint8_t len)
                       sx1262_airtime_ms(&l->radio.cfg, (uint8_t)(FHSS_LINK_HEADER_LEN + len)));
 }
 
-static void try_transmit(fhss_link_t *l)
+/* Returns true if a packet went out. */
+static bool try_transmit(fhss_link_t *l)
 {
+    if (l->q_count == 0 && l->cfg.fill &&
+        in_my_slot(l, HAL_GetTick(),
+                   sx1262_airtime_ms(&l->radio.cfg,
+                                     (uint8_t)(FHSS_LINK_HEADER_LEN + l->max_send_len)))) {
+        uint8_t buf[FHSS_LINK_MAX_PAYLOAD];
+        uint8_t n = l->cfg.fill(l->cfg.user, buf, l->max_send_len);
+        if (n) {
+            fhss_link_send(l, buf, n);
+        }
+    }
     bool have_data = l->q_count > 0;
     bool need_beacon = l->cfg.leader && !l->sent_this_dwell;
     if (!have_data && !need_beacon) {
-        return;
+        return false;
     }
 
     uint8_t len = have_data ? l->queue[l->q_head].len : 0;
@@ -197,15 +213,15 @@ static void try_transmit(fhss_link_t *l)
     uint32_t now = HAL_GetTick();
     uint32_t air = sx1262_airtime_ms(&l->radio.cfg, total);
     if (!in_my_slot(l, now, air)) {
-        return;
+        return false;
     }
     if (!have_data) {
         /* A bare beacon goes at the end of the slot, not the start: data
          * packets carry the sync too, so it is only needed if nothing else
          * went out, and sending it first would push the data back. */
         uint32_t into = l->fhss.cfg.dwell_ms - fhss_ms_until_hop(&l->fhss, now);
-        if (into + air + SLOT_MARGIN_MS + BEACON_LATE_MS < l->leader_slot_ms) {
-            return;
+        if (into + air + LEADER_END_MARGIN_MS + BEACON_LATE_MS < l->leader_slot_ms) {
+            return false;
         }
     }
 
@@ -219,7 +235,8 @@ static void try_transmit(fhss_link_t *l)
         memcpy(&pkt[FHSS_LINK_HEADER_LEN], l->queue[l->q_head].data, len);
     }
 
-    if (sx1262_send(&l->radio, pkt, total) == SX1262_OK) {
+    bool ok = sx1262_send(&l->radio, pkt, total) == SX1262_OK;
+    if (ok) {
         l->stats.tx_packets++;
     } else {
         l->stats.tx_errors++;
@@ -229,6 +246,10 @@ static void try_transmit(fhss_link_t *l)
         l->q_head = (uint8_t)((l->q_head + 1) % FHSS_LINK_QUEUE_LEN);
         l->q_count--;
     }
+    if (ok && l->cfg.on_tx) {
+        l->cfg.on_tx(l->cfg.user, len, now);
+    }
+    return ok;
 }
 
 void fhss_link_poll(fhss_link_t *l)
@@ -240,5 +261,10 @@ void fhss_link_poll(fhss_link_t *l)
     }
 
     handle_rx(l);
-    try_transmit(l);
+    /* back to back while the slot has room, without a trip through the
+     * main loop between packets */
+    for (int i = 0; i < FHSS_LINK_QUEUE_LEN && try_transmit(l); i++) {
+        fhss_tick(&l->fhss, HAL_GetTick());
+        handle_rx(l);
+    }
 }

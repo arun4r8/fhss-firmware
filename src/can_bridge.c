@@ -159,3 +159,16 @@ bool can_bridge_frame_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_
     b->last_seq = seq;
     return true;
 }
+
+uint8_t can_bridge_fill(can_bridge_t *b, uint8_t *buf, uint8_t max)
+{
+    if (!b->cfg.schema || !b->snap.updated) {
+        return 0;
+    }
+    size_t n = telem_frame_build(&b->snap, b->cfg.schema, buf, max);
+    if (n) {
+        b->stats.messages_sent++;
+        b->stats.chunks_sent++;
+    }
+    return (uint8_t)n;
+}

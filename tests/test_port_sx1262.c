@@ -218,6 +218,9 @@ static void on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi)
     s->last[len < 31 ? len : 31] = 0;
 }
 
+static void hook_lead(void *user);
+static void hook_fol(void *user);
+
 static fhss_link_config_t link_cfg(sx1262_emu_t *e, bool leader, rx_sink_t *sink)
 {
     fhss_link_config_t c = {
@@ -227,8 +230,47 @@ static fhss_link_config_t link_cfg(sx1262_emu_t *e, bool leader, rx_sink_t *sink
         .ant_pwr_port = &e->port, .ant_pwr_pin = GPIO_PIN_ANT,
         .leader = leader, .seed = 0x6A5D10u, .net_id = 0x47, .tx_power_dbm = 14,
         .on_rx = on_rx, .user = sink,
+        .tx_wait_hook = leader ? hook_lead : hook_fol,
     };
     return c;
+}
+
+
+/* The two boards run at the same time. Emulated time advances while a radio
+ * transmits (its wait loop), so each node's tx-wait hook polls the other
+ * node: it keeps receiving while this one sends packets back to back. */
+static fhss_link_t *peer_of_lead, *peer_of_fol;
+static void (*lead_extra)(void *);
+static int peer_depth;
+
+static void poll_peer(fhss_link_t *p)
+{
+    if (p && peer_depth == 0) {
+        peer_depth++;
+        fhss_link_poll(p);
+        peer_depth--;
+    }
+}
+
+static void hook_lead(void *user)
+{
+    if (lead_extra) {
+        lead_extra(user);
+    }
+    poll_peer(peer_of_lead);
+}
+
+static void hook_fol(void *user)
+{
+    (void)user;
+    poll_peer(peer_of_fol);
+}
+
+static void set_peers(fhss_link_t *lead, fhss_link_t *fol, void (*extra)(void *))
+{
+    peer_of_lead = fol;
+    peer_of_fol = lead;
+    lead_extra = extra;
 }
 
 static uint32_t freq_at(const sx1262_emu_t *e, uint32_t t)
@@ -254,6 +296,7 @@ static void test_link_end_to_end(void)
 
     fhss_link_config_t lc = link_cfg(&ea, true, &lead_rx);
     fhss_link_config_t fc = link_cfg(&eb, false, &fol_rx);
+    set_peers(NULL, NULL, NULL);
     CHECK(fhss_link_init(&lead, &lc) == FHSS_LINK_OK, "leader init");
 
     const uint32_t follower_boot = 1234, outage_start = 90000, outage_end = 93000;
@@ -267,6 +310,7 @@ static void test_link_end_to_end(void)
     while (emu_now_ms < end) {
         if (!fol_up && emu_now_ms >= follower_boot) {
             CHECK(fhss_link_init(&fol, &fc) == FHSS_LINK_OK, "follower init");
+            set_peers(&lead, &fol, NULL);
             fol_up = true;
         }
         emu_air_enabled = !(emu_now_ms >= outage_start && emu_now_ms < outage_end);
@@ -385,6 +429,7 @@ static void run_max_payload(uint32_t bw_hz, uint16_t leader_slot_ms, int want_le
     fhss_link_config_t lc = link_cfg(&ea, true, &lead_rx), fc = link_cfg(&eb, false, &fol_rx);
     lc.leader_slot_ms = fc.leader_slot_ms = leader_slot_ms;
     lc.bandwidth_hz = fc.bandwidth_hz = bw_hz;
+    set_peers(&lead, &fol, NULL);
     CHECK(fhss_link_init(&lead, &lc) == FHSS_LINK_OK && fhss_link_init(&fol, &fc) == FHSS_LINK_OK,
           "init");
     CHECK(lead.max_send_len == want_lead_len && fol.max_send_len == want_fol_len,
@@ -473,6 +518,7 @@ static void test_foreign_network_ignored(void)
     fhss_link_config_t lc = link_cfg(&ea, true, &sink);
     fhss_link_config_t fc = link_cfg(&eb, false, &sink);
     fc.net_id = 0x99;
+    set_peers(&lead, &fol, NULL);
     fhss_link_init(&lead, &lc);
     fhss_link_init(&fol, &fc);
     while (emu_now_ms < 45000) {
@@ -580,7 +626,8 @@ static void test_can_bridge_over_link(void)
     fhss_link_config_t pc = link_cfg(&ea, true, NULL), gc = link_cfg(&eb, false, NULL);
     pc.on_rx = bridge_on_rx;
     pc.user = &pod;
-    pc.tx_wait_hook = hub_traffic;
+    pc.tx_wait_hook = hook_lead;
+    set_peers(&pod_link, &gnd_link, hub_traffic);
     gc.on_rx = bridge_on_rx;
     gc.user = &gnd;
     CHECK(fhss_link_init(&pod_link, &pc) == FHSS_LINK_OK, "pod link init");
@@ -645,6 +692,12 @@ static bool frame_radio_idle(void *user)
 static bool frame_radio_send(void *user, const uint8_t *data, uint8_t len)
 {
     return fhss_link_send(((frame_node_t *)user)->link, data, len);
+}
+
+/* pod: the link asks for a frame when its slot has room (as on the board) */
+static uint8_t frame_fill(void *user, uint8_t *buf, uint8_t max)
+{
+    return can_bridge_fill(&((frame_node_t *)user)->bridge, buf, max);
 }
 
 /* ground: every reading is its hub's send time in units of 10 ms */
@@ -731,7 +784,9 @@ static void run_frames_over_link(uint32_t bw_hz, uint16_t slot_ms, uint8_t cmd_l
     pc.bandwidth_hz = gc.bandwidth_hz = bw_hz;
     pc.on_rx = frame_pod_on_rx;
     pc.user = &pod;
-    pc.tx_wait_hook = frame_hub_traffic;
+    pc.tx_wait_hook = hook_lead;
+    pc.fill = frame_fill;
+    set_peers(&pod_link, &gnd_link, frame_hub_traffic);
     gc.on_rx = frame_on_rx;
     gc.user = &gnd;
     CHECK(fhss_link_init(&pod_link, &pc) == FHSS_LINK_OK, "pod link init");
@@ -757,7 +812,6 @@ static void run_frames_over_link(uint32_t bw_hz, uint16_t slot_ms, uint8_t cmd_l
             next_cmd += 400;
         }
         frame_hub_traffic(&pod);
-        can_bridge_poll(&pod.bridge);
         fhss_link_poll(&pod_link);
         fhss_link_poll(&gnd_link);
         emu_now_ms++;

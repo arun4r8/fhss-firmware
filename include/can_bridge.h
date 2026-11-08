@@ -111,6 +111,11 @@ uint8_t can_bridge_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_t l
                               can_hub_msg_t *msg, uint8_t data[][8], uint8_t dlc[],
                               uint16_t *id);
 
+/* Pod side, frame mode: build a frame into buf if any reading changed
+ * since the last one (for fhss_link_config_t.fill). Returns its length, 0
+ * if nothing changed or it doesn't fit in max. */
+uint8_t can_bridge_fill(can_bridge_t *b, uint8_t *buf, uint8_t max);
+
 /* Ground side, frame mode: check and unpack a received frame into
  * readings (schema->count entries). false for an invalid payload. */
 bool can_bridge_frame_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_t len,

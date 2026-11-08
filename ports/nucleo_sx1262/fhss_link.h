@@ -53,6 +53,13 @@ typedef struct {
     /* optional: runs while a transmission is in progress (see
      * sx1262_t.tx_wait_hook); may call fhss_link_send() but not poll() */
     void (*tx_wait_hook)(void *user);
+    /* optional: asked for a payload (up to max bytes) the moment this
+     * node's slot has room for one and the queue is empty; return its
+     * length, 0 for nothing. Lets time-sensitive data be built at the last
+     * moment; back-to-back packets go out within one fhss_link_poll(). */
+    uint8_t (*fill)(void *user, uint8_t *buf, uint8_t max);
+    /* optional: called after each transmission (payload length, start ms) */
+    void (*on_tx)(void *user, uint8_t len, uint32_t start_ms);
 } fhss_link_config_t;
 
 typedef struct {
