@@ -65,14 +65,37 @@ void board_init(void)
     pin_mode(GPIOA, 2, MODE_AF, 8);
     pin_mode(GPIOA, 3, MODE_AF, 8);
     LPUART1->BRR = (256u * 4000000u + 115200u / 2u) / 115200u;
-    LPUART1->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+    LPUART1->CR1 = USART_CR1_FIFOEN | USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+}
+
+/* Console output is buffered: uart_puts() only queues characters and the
+ * 1 kHz SysTick interrupt moves them into the LPUART's 8-byte FIFO, so
+ * printing never stalls the radio timing (a 300-character line takes 26 ms
+ * on the wire). Waits only when the buffer is full. */
+#define UART_BUF_SIZE 2048u /* power of two */
+static char uart_buf[UART_BUF_SIZE];
+static volatile uint32_t uart_head; /* written by the main loop */
+static volatile uint32_t uart_tail; /* written by the SysTick interrupt */
+
+void uart_service(void)
+{
+    while (uart_tail != uart_head && (LPUART1->ISR & USART_ISR_TXE_TXFNF)) {
+        LPUART1->TDR = (uint8_t)uart_buf[uart_tail & (UART_BUF_SIZE - 1u)];
+        uart_tail = uart_tail + 1u;
+    }
 }
 
 static void uart_putc(char c)
 {
-    while (!(LPUART1->ISR & USART_ISR_TXE_TXFNF)) {
+    while (uart_head - uart_tail >= UART_BUF_SIZE) {
+        /* full: wait for the interrupt to drain some (or drain here if
+         * interrupts are off) */
+        if (__get_PRIMASK()) {
+            uart_service();
+        }
     }
-    LPUART1->TDR = (uint8_t)c;
+    uart_buf[uart_head & (UART_BUF_SIZE - 1u)] = c;
+    uart_head = uart_head + 1u;
 }
 
 void uart_puts(const char *s)

@@ -53,6 +53,7 @@ extern SPI_HandleTypeDef board_spi1;
 void board_init(void);
 
 void uart_puts(const char *s);
+void uart_service(void); /* called from SysTick: moves buffered output to the UART */
 void uart_put_int(int32_t v);
 void uart_put_hex(uint32_t v, int digits);
 

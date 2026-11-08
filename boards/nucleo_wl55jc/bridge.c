@@ -80,6 +80,14 @@
 #ifndef BRIDGE_BW250
 #define BRIDGE_BW250 0
 #endif
+/* Until the embedded team defines real commands, the ground sends a dummy
+ * command every hop (as long as its slot allows: 9 B at 125 kHz, 30 B at
+ * 250 kHz) so the ground -> pod direction is exercised on hardware:
+ * "CMD", a 16-bit counter, then a counting byte pattern. The pod checks and
+ * counts them. Set to 0 once real commands exist. */
+#ifndef GROUND_TEST_CMDS
+#define GROUND_TEST_CMDS 1
+#endif
 #define LINK_BANDWIDTH_HZ   (BRIDGE_BW250 ? 250000u : 125000u)
 #define LINK_LEADER_SLOT_MS (BRIDGE_BW250 ? 340u : 330u)
 
@@ -87,7 +95,8 @@
 #define FHSS_NET_ID     0x47
 #define TX_DBM          0         /* bench power; raise for range tests */
 #define STATUS_EVERY_MS 5000u
-#define DEMO_EVERY_MS   100u      /* fake hub message rate in DEMO mode */
+#define DEMO_EVERY_MS   25u       /* fake hub messages: hubs 1-4 in turn, each at 10 Hz */
+#define HUB_EVERY_MS    100u      /* HUB mode: hub 4 on the real bus at 10 Hz */
 #ifndef HOP_LOG
 #define HOP_LOG 1
 #endif
@@ -102,6 +111,55 @@ static mcp2515_t can = {
 static int can_ok;
 static uint32_t can_tx_errors;
 static uint32_t hub_msgs_sent;
+static uint32_t cmds_sent, cmds_ok, cmds_bad, cmds_missed;
+static uint16_t cmd_seq;
+
+/* Ground: queue the next dummy command (fills this node's slot). */
+static void send_test_cmd(void)
+{
+    uint8_t c[FHSS_LINK_MAX_PAYLOAD];
+    uint8_t n = link.max_send_len;
+    if (n < 5) {
+        return; /* no room for "CMD" + counter */
+    }
+    c[0] = 'C';
+    c[1] = 'M';
+    c[2] = 'D';
+    c[3] = (uint8_t)(cmd_seq >> 8);
+    c[4] = (uint8_t)cmd_seq;
+    for (uint8_t i = 5; i < n; i++) {
+        c[i] = (uint8_t)(cmd_seq + i);
+    }
+    if (fhss_link_send(&link, c, n)) {
+        cmd_seq++;
+        cmds_sent++;
+    }
+}
+
+/* Pod: payloads from the ground (only dummy commands for now). */
+static void pod_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi_dbm)
+{
+    (void)user;
+    (void)rssi_dbm;
+    static int32_t last = -1;
+    if (len == 0) {
+        return;
+    }
+    bool ok = len >= 5 && data[0] == 'C' && data[1] == 'M' && data[2] == 'D';
+    uint16_t seq = ok ? (uint16_t)((data[3] << 8) | data[4]) : 0;
+    for (uint8_t i = 5; ok && i < len; i++) {
+        ok = data[i] == (uint8_t)(seq + i);
+    }
+    if (!ok) {
+        cmds_bad++;
+        return;
+    }
+    if (last >= 0) {
+        cmds_missed += (uint16_t)(seq - (uint16_t)last - 1u);
+    }
+    last = seq;
+    cmds_ok++;
+}
 
 static bool radio_idle(void *user)
 {
@@ -187,7 +245,7 @@ static void on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi_dbm
     }
 }
 
-/* DEMO: messages from hubs 1-4 in turn (each hub every 400 ms), readings
+/* DEMO: messages from hubs 1-4 in turn (each hub every 100 ms), readings
  * counting up, sent as CAN frames that the MCP2515 loops straight back to us.
  * HUB: hub 4 only, onto the real bus for the pod to pick up. Sensors are the
  * layout's sensors for that hub. */
@@ -205,6 +263,12 @@ static void demo_hub_message(void)
     uint8_t buf[CAN_MSG_MAX_BYTES], data[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
     uint8_t n = can_msg_to_frames(buf, can_msg_encode(&m, buf, sizeof(buf)), data, dlc);
     for (uint8_t i = 0; i < n; i++) {
+        if (!can_ok) {
+            /* DEMO without a working MCP2515: hand the frames straight to
+             * the bridge, so the radio path can still be tested */
+            can_bridge_on_frame(&bridge, (uint16_t)(0x100 + hub), data[i], dlc[i], HAL_GetTick());
+            continue;
+        }
         can_frame_t f = {.id = (uint16_t)(0x100 + hub), .dlc = dlc[i]};
         memcpy(f.data, data[i], dlc[i]);
         if (mcp2515_send(&can, &f) != MCP2515_OK) {
@@ -263,6 +327,12 @@ static void print_status(void)
         uart_put_int((int32_t)(b->reasm_errors + b->no_slot + b->radio_refused));
         uart_puts(", radio tx ");
         uart_put_int((int32_t)link.stats.tx_packets);
+        uart_puts(", ground cmds ok ");
+        uart_put_int((int32_t)cmds_ok);
+        uart_puts(", missed ");
+        uart_put_int((int32_t)cmds_missed);
+        uart_puts(", bad ");
+        uart_put_int((int32_t)cmds_bad);
     } else {
         uart_puts(fhss_link_locked(&link) ? "status: locked" : "status: searching for the pod");
         uart_puts(", frames ");
@@ -273,6 +343,13 @@ static void print_status(void)
         uart_put_int((int32_t)b->radio_bad);
         uart_puts(", crc errors ");
         uart_put_int((int32_t)link.stats.rx_crc_errors);
+        if (GROUND_TEST_CMDS) {
+            uart_puts(", test cmds sent ");
+            uart_put_int((int32_t)cmds_sent);
+            uart_puts(" (");
+            uart_put_int(link.max_send_len);
+            uart_puts(" B)");
+        }
         if (can_ok && BRIDGE_HUB) {
             uart_puts(", hub 4 msgs put on CAN ");
             uart_put_int((int32_t)hub_msgs_sent);
@@ -310,8 +387,9 @@ int main(void)
     if (!can_ok) {
         uart_puts("CAN controller init failed, error ");
         uart_put_int(err);
-        uart_puts(BRIDGE_ROLE == ROLE_POD ? " (nothing to forward; check wiring, see selftest)\n"
-                                          : " (continuing: console output only)\n");
+        uart_puts(BRIDGE_ROLE != ROLE_POD ? " (continuing: console output only)\n"
+                  : BRIDGE_DEMO ? " (DEMO continues without it: fake hub frames go straight to the bridge)\n"
+                                : " (nothing to forward; check wiring, see selftest)\n");
     }
 
     can_bridge_config_t bc = {
@@ -339,7 +417,7 @@ int main(void)
         .tx_power_dbm = TX_DBM,
         .leader_slot_ms = LINK_LEADER_SLOT_MS,
         .bandwidth_hz = LINK_BANDWIDTH_HZ,
-        .on_rx = BRIDGE_ROLE == ROLE_GROUND ? on_rx : NULL,
+        .on_rx = BRIDGE_ROLE == ROLE_GROUND ? on_rx : pod_on_rx,
         .tx_wait_hook = BRIDGE_ROLE == ROLE_POD ? drain_can : NULL,
     };
     while (fhss_link_init(&link, &lc) != FHSS_LINK_OK) {
@@ -365,15 +443,20 @@ int main(void)
     uint32_t next_demo = HAL_GetTick() + DEMO_EVERY_MS;
     for (;;) {
         if (BRIDGE_ROLE == ROLE_POD) {
-            if (BRIDGE_DEMO && can_ok && (int32_t)(HAL_GetTick() - next_demo) >= 0) {
+            if (BRIDGE_DEMO && (int32_t)(HAL_GetTick() - next_demo) >= 0) {
                 next_demo += DEMO_EVERY_MS;
                 demo_hub_message();
             }
             drain_can(NULL);
             can_bridge_poll(&bridge);
-        } else if (BRIDGE_HUB && can_ok && (int32_t)(HAL_GetTick() - next_demo) >= 0) {
-            next_demo += DEMO_EVERY_MS;
-            demo_hub_message();
+        } else {
+            if (BRIDGE_HUB && can_ok && (int32_t)(HAL_GetTick() - next_demo) >= 0) {
+                next_demo += HUB_EVERY_MS;
+                demo_hub_message();
+            }
+            if (GROUND_TEST_CMDS && link.q_count == 0 && fhss_link_locked(&link)) {
+                send_test_cmd();
+            }
         }
         /* what the next transmission would carry, to log its length */
         uint8_t queued_len = link.q_count ? link.queue[link.q_head].len : 0;

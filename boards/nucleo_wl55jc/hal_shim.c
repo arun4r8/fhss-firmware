@@ -1,10 +1,12 @@
 #include "hal_shim.h"
+#include "board.h"
 
 static volatile uint32_t ticks_ms;
 
 void SysTick_Handler(void)
 {
     ticks_ms++;
+    uart_service();
 }
 
 uint32_t HAL_GetTick(void)

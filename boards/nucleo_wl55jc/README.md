@@ -149,7 +149,7 @@ make flash APP=bridge ROLE=pod DEMO=1
 
 - **Pod** (leader): reads every CAN frame from the MCP2515, reassembles hub messages, and keeps each sensor's latest reading. When its slot opens and something changed, it sends all 38 as one frame, so the data is as fresh as possible. Its frames also carry the hop timing. The radio driver keeps draining the MCP2515 while a frame is on air (about 150 ms), because the MCP2515 only holds 2 received frames.
 - **Ground** (follower): prints each frame, for example `rx frame, rssi -48 dBm: 1.0=1234 1.1=1235 ... 4.7=-` as `hub.sensor=reading`, where `-` means no valid reading. If an MCP2515 is connected, it rebuilds each hub's message and re-sends it on CAN as ID `0x200 + hub`.
-- **Demo:** with only one setup, `DEMO=1` puts the MCP2515 in loopback and feeds it fake messages from hubs 1–4 in turn, one every 100 ms. The whole pod path runs. The status line every 5 s should show hub messages climbing, about 5 frames sent per second, and the rest counted as "merged before sending".
+- **Demo:** with only one setup, `DEMO=1` puts the MCP2515 in loopback and feeds it fake messages from hubs 1–4 in turn, each hub at 10 Hz (one message every 25 ms). The whole pod path runs. If the MCP2515 doesn't answer, the demo hands the frames straight to the bridge instead, so the radio can still be tested. The status line every 5 s should show hub messages climbing, about 5 frames sent per second (10 with `BW250=1`), and the rest counted as "merged before sending".
 - **Both boards must use the same `LINK_LEADER_SLOT_MS` and `TELEM_SCHEMA`.** A ground with a different layout version prints "not a telemetry frame for this layout".
 
 Placeholders at the top of `bridge.c`, to confirm with the embedded team:
@@ -189,9 +189,8 @@ Hopping as leader (0 dBm, beacon every dwell). One line per 20 s cycle:
 
 Measured send time is 2–3 ms longer than the calculated airtime. That's SPI and polling overhead at the 4 MHz system clock, within the link's 5 ms retune margin.
 
-**Since then (bench logs in `logs/`):** the two-board link, and the old per-hub bridge end to end through CAN loopback, both work on hardware.
+**Since then (bench logs in `logs/`):** the two-board link, and the old per-hub bridge end to end through CAN loopback, both work on hardware. On 11-08 the 38-sensor frame ran on both boards in both directions: 125 kHz / 330/70 gave 5.00 frames/s (2 on every hop) and 190/190 commands up; 250 kHz / 340/60 gave 9.91 frames/s and 190/190 commands. 0 frames missed in both.
 
 **Not yet verified on hardware:**
-- **Frame mode and the 330/70 split.** Measured send time runs 2–3 ms over the calculated airtime, which leaves about 6 ms of slack for the pod's second frame each hop. If it misses, that hop carries one frame instead of two.
 - **The hop pattern on a spectrum analyzer or SDR.**
 - **The CAN transceiver and bus between two nodes:** the ground's frames got no acknowledgement on 10-25 (see `logs/README.md`).

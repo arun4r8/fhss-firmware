@@ -12,6 +12,7 @@
 
 #define RETUNE_MARGIN_MS    5u  /* radio retune + SPI overhead */
 #define SLOT_MARGIN_MS      10u /* absorbs sync error between nodes */
+#define BEACON_LATE_MS      15u /* window at the end of the slot for a bare beacon */
 
 #define FLAG_FROM_LEADER    0x01
 
@@ -194,8 +195,18 @@ static void try_transmit(fhss_link_t *l)
     uint8_t len = have_data ? l->queue[l->q_head].len : 0;
     uint8_t total = (uint8_t)(FHSS_LINK_HEADER_LEN + len);
     uint32_t now = HAL_GetTick();
-    if (!in_my_slot(l, now, sx1262_airtime_ms(&l->radio.cfg, total))) {
+    uint32_t air = sx1262_airtime_ms(&l->radio.cfg, total);
+    if (!in_my_slot(l, now, air)) {
         return;
+    }
+    if (!have_data) {
+        /* A bare beacon goes at the end of the slot, not the start: data
+         * packets carry the sync too, so it is only needed if nothing else
+         * went out, and sending it first would push the data back. */
+        uint32_t into = l->fhss.cfg.dwell_ms - fhss_ms_until_hop(&l->fhss, now);
+        if (into + air + SLOT_MARGIN_MS + BEACON_LATE_MS < l->leader_slot_ms) {
+            return;
+        }
     }
 
     uint8_t pkt[FHSS_LINK_HEADER_LEN + FHSS_LINK_MAX_PAYLOAD];
