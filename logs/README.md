@@ -68,6 +68,10 @@ Hardware: two NUCLEO-WL55JC2 boards with SX1262 shields, plus HW-184 MCP2515 mod
 | 10-25 PM | Ground board self-test (second HW-184) | All checks passed, including CAN loopback | 20:53 |
 | 10-25 PM | Real CAN bus between the boards (ground as fake hub 5 → pod) | **Not working yet.** Ground TX gets no ACK (EFLG 0x15, then 0x0B after a re-wire); the pod sees 0 frames. Suspects: ground MCP2515↔transceiver TX/RX link, transceiver power/SLNT, H/L wiring. Radio link stayed locked throughout. | 20:54–21:14 |
 | 10-25 PM | MATLAB live demo, 3 runs × 15 s, both boards | 38 hops each, **222 / 223 received (99.6%)**: 75/75, 73/74, 74/74; 0 off-sequence | `plots/hop_demo_*.png` (212054, 212758, 212929) |
+| 11-08 | Self-test, both boards | Radios pass (crystal, PLL 50/50, 74–75 ms TX). **Both MCP2515s give no SPI reply** (modules being replaced), so the pod demo fed its fake hub frames to the bridge in software for the runs below | `hardware/2026-11-08.md` |
+| 11-08 | **38-sensor frame, 125 kHz, 330/70 split**, both directions, 76 s | **5.00 frames/s, 2 frames on all 183 hops**, 380/380 received, 0 missed, 0 CRC errors, none past the slot, −38 dBm. Ground → pod dummy commands (9 B, one per hop): **190/190**, 0 missed or corrupted | same |
+| 11-08 | **38-sensor frame, 250 kHz, 340/60 split**, both directions, 76 s | **9.91 frames/s**, 4 frames on 175 of 183 hops (3 on the rest: the 4th frame's start is within ~2 ms of its deadline), 753/753 received, 0 missed, 0 CRC errors. Commands (30 B): **190/190** | same |
+| 11-08 | Bugs found on hardware, fixed | (1) Blocking console output (26 ms per frame line) made the ground miss its 70 ms slot: only 10 commands in 76 s. Console output is now buffered and sent from the 1 kHz tick. (2) The pod's once-per-hop beacon could go out ahead of the first frame and push the second frame out of the slot (1 frame on 104 of 183 hops). A bare beacon now goes at the end of the slot. | same |
 
 Notes for reading the captures:
 
