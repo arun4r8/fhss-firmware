@@ -326,6 +326,98 @@ static void test_slots(void)
     CHECK(b.stats.messages_in == 1, "stale partial message kept its slot");
 }
 
+/* ---- frame mode -------------------------------------------------------- */
+
+static can_bridge_config_t frame_config(radio_t *r)
+{
+    can_bridge_config_t c = config(r);
+    c.max_payload = 77;
+    c.schema = &telem_schema_placeholder;
+    return c;
+}
+
+static can_hub_msg_t placeholder_msg(uint8_t hub, uint16_t base)
+{
+    can_hub_msg_t m = {.hub = hub, .count = hub == 4 ? 8 : 10};
+    for (uint8_t i = 0; i < m.count; i++) {
+        m.sensor[i] = (can_sensor_t){.type = 1, .id = i, .reading = (uint16_t)(base + i)};
+    }
+    return m;
+}
+
+static void test_frame_config(void)
+{
+    printf("frame mode: layout must fit the radio payload\n");
+    static can_bridge_t b;
+    radio_t r;
+    can_bridge_config_t c = frame_config(&r);
+    CHECK(can_bridge_init(&b, &c), "77-byte frame in a 77-byte payload rejected");
+    c.max_payload = 76;
+    CHECK(!can_bridge_init(&b, &c), "77-byte frame accepted into a 76-byte payload");
+    telem_slot_t dup[] = {{1, 1, 0}, {1, 1, 0}};
+    telem_schema_t bad = {.version = 1, .count = 2, .slot = dup};
+    c = frame_config(&r);
+    c.schema = &bad;
+    CHECK(!can_bridge_init(&b, &c), "invalid layout accepted");
+}
+
+static void test_frame_mode(void)
+{
+    printf("frame mode: four hubs -> one 77-byte frame, sent only when something changed\n");
+    static can_bridge_t pod, gnd;
+    radio_t r, unused;
+    can_bridge_config_t c = frame_config(&r);
+    can_bridge_init(&pod, &c);
+    c = frame_config(&unused);
+    can_bridge_init(&gnd, &c);
+
+    CHECK(!can_bridge_poll(&pod) && r.n == 0, "frame sent before any data");
+    for (uint8_t h = 1; h <= 4; h++) {
+        can_hub_msg_t m = placeholder_msg(h, (uint16_t)(100 * h));
+        feed(&pod, (uint16_t)(0x100 + h), &m, 10);
+    }
+    CHECK(pod.stats.messages_in == 4 && pod.stats.reasm_errors == 0, "pod took %u messages",
+          pod.stats.messages_in);
+    r.busy = true;
+    CHECK(!can_bridge_poll(&pod), "sent while the radio was busy");
+    r.busy = false;
+    CHECK(can_bridge_poll(&pod) && r.n == 1 && r.len[0] == 77, "one 77-byte frame expected, got %d", r.n);
+    CHECK(!can_bridge_poll(&pod) && r.n == 1, "same data sent twice");
+
+    uint16_t v[38];
+    CHECK(can_bridge_frame_from_radio(&gnd, r.data[0], r.len[0], v), "ground rejected the frame");
+    CHECK(v[0] == 100 && v[9] == 109 && v[10] == 200 && v[37] == 407, "readings %u %u %u %u",
+          v[0], v[9], v[10], v[37]);
+
+    /* only hub 2 updates, twice before the radio is free: newest wins */
+    can_hub_msg_t m = placeholder_msg(2, 5000);
+    feed(&pod, 0x102, &m, 20);
+    m = placeholder_msg(2, 6000);
+    feed(&pod, 0x102, &m, 30);
+    /* hubs 2-4 merged into the first unsent frame (3), then this one (1) */
+    CHECK(pod.stats.superseded == 4, "superseded %u", pod.stats.superseded);
+    CHECK(can_bridge_poll(&pod) && r.n == 2, "updated frame not sent");
+    CHECK(can_bridge_frame_from_radio(&gnd, r.data[1], r.len[1], v), "second frame rejected");
+    CHECK(v[10] == 6000 && v[0] == 100 && v[37] == 407, "hub 2 should be newest, others kept");
+    CHECK(gnd.stats.radio_in == 2 && gnd.stats.frames_missed == 0, "in %u, missed %u",
+          gnd.stats.radio_in, gnd.stats.frames_missed);
+
+    /* the ground notices dropped frames from the sequence number */
+    for (int i = 0; i < 3; i++) {
+        feed(&pod, 0x102, &m, (uint32_t)(40 + i));
+        can_bridge_poll(&pod);
+    }
+    CHECK(r.n == 5, "%d frames", r.n);
+    CHECK(can_bridge_frame_from_radio(&gnd, r.data[4], r.len[4], v), "fifth frame rejected");
+    CHECK(gnd.stats.frames_missed == 2, "missed %u, want 2", gnd.stats.frames_missed);
+
+    /* a hub message in the old per-hub format is not a frame */
+    uint8_t buf[CAN_MSG_MAX_BYTES];
+    size_t len = can_msg_encode(&m, buf, sizeof(buf));
+    CHECK(!can_bridge_frame_from_radio(&gnd, buf, (uint8_t)len, v) && gnd.stats.radio_bad == 1,
+          "hub message accepted as a frame");
+}
+
 int main(void)
 {
     test_config();
@@ -335,6 +427,8 @@ int main(void)
     test_freshest_wins_round_robin();
     test_interleaved_senders();
     test_slots();
+    test_frame_config();
+    test_frame_mode();
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

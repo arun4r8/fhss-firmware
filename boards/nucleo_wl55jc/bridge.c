@@ -3,21 +3,29 @@
  * SX1262 shield + MCP2515 (see README.md for wiring). Logic lives in
  * src/can_bridge.c; this file wires it to the hardware.
  *
+ * Telemetry goes as one frame of every sensor (src/telem_frame.c, layout
+ * TELEM_SCHEMA): the pod keeps each sensor's latest reading from the hub
+ * messages on CAN and sends the whole set, without per-sensor tags, each
+ * time its slot opens and something changed. Each 400 ms hop gives the pod
+ * the first LINK_LEADER_SLOT_MS (two 77-byte frames = 5 frames/s) and the
+ * ground the rest (one payload of up to 9 bytes, for commands).
+ *
  * Build one role per board:
- *   make bridge ROLE=pod      on the pod: hub messages from the CAN bus go out
- *                             over the radio. Hopping leader, so its beacons
- *                             carry the telemetry.
- *   make bridge ROLE=ground   at the ground station: received messages are
+ *   make bridge ROLE=pod      on the pod: sensor readings from the CAN bus go
+ *                             out over the radio. Hopping leader, so its
+ *                             frames also carry the hop timing.
+ *   make bridge ROLE=ground   at the ground station: received frames are
  *                             printed on the serial console and, if an MCP2515
- *                             is connected, re-sent on CAN as ID 0x200 + hub.
+ *                             is connected, each hub's message is rebuilt and
+ *                             re-sent on CAN as ID 0x200 + hub.
  *   make bridge ROLE=pod DEMO=1
- *                             single-board test: no CAN bus needed. Fake hub
- *                             messages go through the MCP2515 in loopback, so
- *                             reassembly, chunking and transmission all run.
+ *                             single-board test: no CAN bus needed. Fake
+ *                             messages from hubs 1-4 go through the MCP2515 in
+ *                             loopback, so the whole pod path runs.
  *   make bridge ROLE=ground HUB=1
  *                             real CAN bus test with two boards: the ground
- *                             station's MCP2515 plays a hub on the bus (hub 5,
- *                             ID 0x105, every 100 ms). The pod (plain ROLE=pod)
+ *                             station's MCP2515 plays hub 4 on the bus (ID
+ *                             0x104, every 100 ms). The pod (plain ROLE=pod)
  *                             picks the frames up through its transceiver and
  *                             radios them back, so the ground prints what it
  *                             put on the wires. Received messages are not
@@ -41,6 +49,7 @@
 #include "can_bridge.h"
 #include "fhss_link.h"
 #include "mcp2515.h"
+#include "telem_frame.h"
 
 #define ROLE_POD    1
 #define ROLE_GROUND 2
@@ -61,6 +70,18 @@
 #define HUB_ID_MASK     0x000u   /* 0 = forward every ID */
 #define HUB_ID_MATCH    0x000u
 #define GROUND_ID_BASE  0x200u
+/* sensor order: placeholder until the embedded team sends the real one */
+#define TELEM_SCHEMA    telem_schema_placeholder
+/* LoRa bandwidth and the pod's share of each 400 ms hop; both must be the
+ * same on both boards. 125 kHz + 330 ms: 2 frames per hop (5/s), 9-byte
+ * commands up. 250 kHz + 340 ms (make bridge ... BW250=1): 4 frames per hop
+ * (10/s), 30-byte commands up; verified in host emulation only, and needs
+ * the RF lead's OK on the 20 dB bandwidth first (fhss_link.h). */
+#ifndef BRIDGE_BW250
+#define BRIDGE_BW250 0
+#endif
+#define LINK_BANDWIDTH_HZ   (BRIDGE_BW250 ? 250000u : 125000u)
+#define LINK_LEADER_SLOT_MS (BRIDGE_BW250 ? 340u : 330u)
 
 #define FHSS_SEED       0x6A5D10u /* same on both boards */
 #define FHSS_NET_ID     0x47
@@ -85,7 +106,9 @@ static uint32_t hub_msgs_sent;
 static bool radio_idle(void *user)
 {
     (void)user;
-    return link.q_count == 0;
+    /* build the frame only when it can go out at once, so it is fresh */
+    return link.q_count == 0 &&
+           fhss_link_slot_open(&link, (uint8_t)telem_frame_length(&TELEM_SCHEMA));
 }
 
 static bool radio_send(void *user, const uint8_t *data, uint8_t len)
@@ -105,20 +128,24 @@ static void drain_can(void *user)
     }
 }
 
-static void print_message(const can_hub_msg_t *m, int16_t rssi)
+/* Ground: one line per frame, "hub.sensor=reading", "-" = no valid reading */
+static void print_frame(const uint16_t *v, int16_t rssi)
 {
-    uart_puts("rx hub ");
-    uart_put_int(m->hub);
-    uart_puts(", rssi ");
+    const telem_schema_t *sc = &TELEM_SCHEMA;
+    uart_puts("rx frame, rssi ");
     uart_put_int(rssi);
     uart_puts(" dBm:");
-    for (uint8_t i = 0; i < m->count; i++) {
-        const can_sensor_t *s = &m->sensor[i];
+    for (uint8_t i = 0; i < sc->count; i++) {
         uart_puts(" ");
-        uart_put_int(s->id);
-        uart_puts(s->error ? "!" : "");
+        uart_put_int(sc->slot[i].hub);
+        uart_puts(".");
+        uart_put_int(sc->slot[i].id);
         uart_puts("=");
-        uart_put_int(s->reading);
+        if (v[i] == TELEM_FAULT) {
+            uart_puts("-");
+        } else {
+            uart_put_int(v[i]);
+        }
     }
     uart_puts("\n");
 }
@@ -130,37 +157,49 @@ static void on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi_dbm
     if (len == 0) {
         return; /* beacon with no telemetry */
     }
-    static can_hub_msg_t m;
-    uint8_t frames[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
-    uint16_t id;
-    uint8_t n = can_bridge_from_radio(&bridge, data, len, &m, frames, dlc, &id);
-    if (n == 0) {
-        uart_puts("rx payload is not a hub message (");
+    uint16_t v[TELEM_MAX_SENSORS];
+    if (!can_bridge_frame_from_radio(&bridge, data, len, v)) {
+        uart_puts("rx payload is not a telemetry frame for this layout (");
         uart_put_int(len);
         uart_puts(" bytes)\n");
         return;
     }
-    print_message(&m, rssi_dbm);
-    for (uint8_t i = 0; can_ok && !BRIDGE_HUB && i < n; i++) {
-        can_frame_t f = {.id = id, .dlc = dlc[i]};
-        memcpy(f.data, frames[i], dlc[i]);
-        if (mcp2515_send(&can, &f) != MCP2515_OK) {
-            can_tx_errors++;
-            break; /* no other node ACKing: don't stall the radio */
+    print_frame(v, rssi_dbm);
+    if (!can_ok || BRIDGE_HUB) {
+        return;
+    }
+    /* rebuild each hub's message and re-send it on ID 0x200 + hub */
+    for (uint8_t hub = 0; hub < 16; hub++) {
+        can_hub_msg_t m;
+        if (!telem_frame_hub_msg(&TELEM_SCHEMA, v, hub, &m)) {
+            continue;
+        }
+        uint8_t buf[CAN_MSG_MAX_BYTES], frames[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
+        uint8_t n = can_msg_to_frames(buf, can_msg_encode(&m, buf, sizeof(buf)), frames, dlc);
+        for (uint8_t i = 0; i < n; i++) {
+            can_frame_t f = {.id = (uint16_t)(GROUND_ID_BASE + hub), .dlc = dlc[i]};
+            memcpy(f.data, frames[i], dlc[i]);
+            if (mcp2515_send(&can, &f) != MCP2515_OK) {
+                can_tx_errors++;
+                return; /* no other node ACKing: don't stall the radio */
+            }
         }
     }
 }
 
-/* DEMO: a 10-sensor message from hub 3, readings counting up, sent as CAN
- * frames that the MCP2515 loops straight back to us.
- * HUB: the same from hub 5, sent onto the real bus for the pod to pick up. */
+/* DEMO: messages from hubs 1-4 in turn (each hub every 400 ms), readings
+ * counting up, sent as CAN frames that the MCP2515 loops straight back to us.
+ * HUB: hub 4 only, onto the real bus for the pod to pick up. Sensors are the
+ * layout's sensors for that hub. */
 static void demo_hub_message(void)
 {
     static uint16_t counter;
-    const uint8_t hub = BRIDGE_HUB ? 5 : 3;
-    can_hub_msg_t m = {.hub = hub, .count = 10};
-    for (uint8_t i = 0; i < 10; i++) {
-        m.sensor[i] = (can_sensor_t){.type = 1, .id = i, .reading = (uint16_t)(counter + i)};
+    static uint8_t turn;
+    const uint8_t hub = BRIDGE_HUB ? 4 : (uint8_t)(1 + turn++ % 4);
+    can_hub_msg_t m;
+    telem_frame_hub_msg(&TELEM_SCHEMA, (const uint16_t[TELEM_MAX_SENSORS]){0}, hub, &m);
+    for (uint8_t i = 0; i < m.count; i++) {
+        m.sensor[i].reading = (uint16_t)(counter + i);
     }
     counter = (uint16_t)(counter + 10);
     uint8_t buf[CAN_MSG_MAX_BYTES], data[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
@@ -214,26 +253,28 @@ static void print_status(void)
         uart_put_int((int32_t)b->frames_in);
         uart_puts(", hub msgs ");
         uart_put_int((int32_t)b->messages_in);
-        uart_puts(", sent ");
+        uart_puts(", frames sent ");
         uart_put_int((int32_t)b->messages_sent);
-        uart_puts(" (");
-        uart_put_int((int32_t)b->chunks_sent);
-        uart_puts(" pkts), replaced by newer ");
+        uart_puts(", msgs merged before sending ");
         uart_put_int((int32_t)b->superseded);
+        uart_puts(", unknown sensors ");
+        uart_put_int((int32_t)bridge.snap.unmapped);
         uart_puts(", errors ");
         uart_put_int((int32_t)(b->reasm_errors + b->no_slot + b->radio_refused));
         uart_puts(", radio tx ");
         uart_put_int((int32_t)link.stats.tx_packets);
     } else {
         uart_puts(fhss_link_locked(&link) ? "status: locked" : "status: searching for the pod");
-        uart_puts(", hub msgs ");
+        uart_puts(", frames ");
         uart_put_int((int32_t)b->radio_in);
+        uart_puts(", missed ");
+        uart_put_int((int32_t)b->frames_missed);
         uart_puts(", bad ");
         uart_put_int((int32_t)b->radio_bad);
         uart_puts(", crc errors ");
         uart_put_int((int32_t)link.stats.rx_crc_errors);
         if (can_ok && BRIDGE_HUB) {
-            uart_puts(", hub msgs put on CAN ");
+            uart_puts(", hub 4 msgs put on CAN ");
             uart_put_int((int32_t)hub_msgs_sent);
             uart_puts(", CAN send failures ");
             uart_put_int((int32_t)can_tx_errors);
@@ -259,9 +300,9 @@ int main(void)
     HAL_Delay(200); /* let the host's serial monitor attach */
 
     uart_puts(BRIDGE_ROLE == ROLE_POD
-                  ? (BRIDGE_DEMO ? "\n=== CAN bridge: pod, DEMO (MCP2515 loopback, fake hub 3) ===\n"
+                  ? (BRIDGE_DEMO ? "\n=== CAN bridge: pod, DEMO (MCP2515 loopback, fake hubs 1-4) ===\n"
                                  : "\n=== CAN bridge: pod (CAN -> radio, hopping leader) ===\n")
-                  : (BRIDGE_HUB ? "\n=== CAN bridge: ground + fake hub 5 on the CAN bus ===\n"
+                  : (BRIDGE_HUB ? "\n=== CAN bridge: ground + fake hub 4 on the CAN bus ===\n"
                                 : "\n=== CAN bridge: ground (radio -> console + CAN) ===\n"));
 
     int err = mcp2515_init(&can);
@@ -275,10 +316,15 @@ int main(void)
 
     can_bridge_config_t bc = {
         .rx_id_mask = HUB_ID_MASK, .rx_id_match = HUB_ID_MATCH, .tx_id_base = GROUND_ID_BASE,
-        .max_payload = FHSS_LINK_MAX_PAYLOAD,
+        .max_payload = FHSS_LINK_MAX_PAYLOAD, .schema = &TELEM_SCHEMA,
         .radio_idle = radio_idle, .radio_send = radio_send,
     };
-    can_bridge_init(&bridge, &bc);
+    if (!can_bridge_init(&bridge, &bc)) {
+        uart_puts("telemetry layout does not fit the radio payload; fix TELEM_SCHEMA\n");
+        led_set(LED_RED_PORT, LED_RED_PIN, 1);
+        for (;;) {
+        }
+    }
 
     fhss_link_config_t lc = {
         .spi = &board_spi1,
@@ -291,6 +337,8 @@ int main(void)
         .seed = FHSS_SEED,
         .net_id = FHSS_NET_ID,
         .tx_power_dbm = TX_DBM,
+        .leader_slot_ms = LINK_LEADER_SLOT_MS,
+        .bandwidth_hz = LINK_BANDWIDTH_HZ,
         .on_rx = BRIDGE_ROLE == ROLE_GROUND ? on_rx : NULL,
         .tx_wait_hook = BRIDGE_ROLE == ROLE_POD ? drain_can : NULL,
     };

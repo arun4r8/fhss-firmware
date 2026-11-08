@@ -7,6 +7,8 @@
 #   make bridge ROLE=pod DEMO=1  build build/bridge-demo.bin (one board, no CAN bus)
 #   make bridge ROLE=ground HUB=1  build build/bridge-ground-hub.bin (real CAN bus test:
 #                                the ground board plays a hub; pair with ROLE=pod)
+#   add BW250=1 to any bridge build for LoRa 250 kHz + 340/60 split (both boards
+#                                must match; output name ends in -bw250)
 #   make flash [APP=bridge ROLE=... DEMO=1]
 #                                copy it onto the Nucleo's USB drive (drag-and-drop)
 #   make flash-swd [APP=... SERIAL=...]
@@ -63,7 +65,12 @@ else ifeq ($(HUB),1)
 else
   BRIDGE_NAME := bridge-$(ROLE)
 endif
-BRIDGE_SRCS := bridge.c $(ROOT)/src/can_bridge.c $(ROOT)/src/can_msg.c
+BW250 ?= 0
+ifeq ($(BW250),1)
+  BRIDGE_DEFS += -DBRIDGE_BW250=1
+  BRIDGE_NAME := $(BRIDGE_NAME)-bw250
+endif
+BRIDGE_SRCS := bridge.c $(ROOT)/src/can_bridge.c $(ROOT)/src/telem_frame.c $(ROOT)/src/can_msg.c
 
 APP ?= selftest
 FLASH_BIN := $(BUILD)/$(if $(filter bridge,$(APP)),$(BRIDGE_NAME),selftest).bin
@@ -80,6 +87,8 @@ bridges:
 	$(MAKE) bridge ROLE=ground
 	$(MAKE) bridge ROLE=pod DEMO=1
 	$(MAKE) bridge ROLE=ground HUB=1
+	$(MAKE) bridge ROLE=pod DEMO=1 BW250=1
+	$(MAKE) bridge ROLE=ground BW250=1
 
 $(BUILD)/selftest.elf: selftest.c $(DEPS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COMMON) selftest.c $(LDFLAGS) -Wl,-Map=$(BUILD)/selftest.map -lgcc -o $@

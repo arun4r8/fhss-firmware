@@ -137,18 +137,20 @@ It doesn't touch the transceiver or the bus. Testing those needs a second CAN no
 
 ## CAN bridge firmware
 
-`bridge.c` forwards the embedded team's hub messages from the pod's CAN bus over the hopping link. Build one role per board:
+`bridge.c` carries the embedded team's sensor readings from the pod's CAN bus over the hopping link, as one tag-free frame of all 38 sensors (see "CAN bridge" in the top-level README). Each 400 ms hop gives the pod 330 ms (two frames) and the ground 70 ms (one payload of up to 9 bytes). Build one role per board:
 
 ```sh
 make bridge ROLE=pod           # build/bridge-pod.bin: CAN -> radio, hopping leader
 make bridge ROLE=ground        # build/bridge-ground.bin: radio -> console (+ CAN if wired)
 make bridge ROLE=pod DEMO=1    # build/bridge-demo.bin: one board, no CAN bus needed
+make bridge ROLE=ground HUB=1  # build/bridge-ground-hub.bin: ground also plays hub 4 on a real CAN bus
 make flash APP=bridge ROLE=pod DEMO=1
 ```
 
-- **Pod** (leader): reads every CAN frame from the MCP2515, reassembles hub messages, and sends each hub's newest message over the radio. Its every-dwell beacon carries the telemetry. The radio driver keeps draining the MCP2515 while a packet is on air (about 75 ms), because the MCP2515 only holds 2 received frames.
-- **Ground** (follower): prints each message it receives, for example `rx hub 3, rssi -48 dBm: 0=1234 1=1235 ...` (a `!` after a sensor ID means its error bit is set). If an MCP2515 is connected, it also re-sends the message on CAN as ID `0x200 + hub`.
-- **Demo:** with only one setup, `DEMO=1` puts the MCP2515 in loopback and feeds it a fake 10-sensor message from hub 3 every 100 ms. Reassembly, chunking and transmission all run as on the pod. The status line every 5 s should show hub messages climbing, about 5 sent per second, and the rest counted as "replaced by newer".
+- **Pod** (leader): reads every CAN frame from the MCP2515, reassembles hub messages, and keeps each sensor's latest reading. When its slot opens and something changed, it sends all 38 as one frame, so the data is as fresh as possible. Its frames also carry the hop timing. The radio driver keeps draining the MCP2515 while a frame is on air (about 150 ms), because the MCP2515 only holds 2 received frames.
+- **Ground** (follower): prints each frame, for example `rx frame, rssi -48 dBm: 1.0=1234 1.1=1235 ... 4.7=-` as `hub.sensor=reading`, where `-` means no valid reading. If an MCP2515 is connected, it rebuilds each hub's message and re-sends it on CAN as ID `0x200 + hub`.
+- **Demo:** with only one setup, `DEMO=1` puts the MCP2515 in loopback and feeds it fake messages from hubs 1–4 in turn, one every 100 ms. The whole pod path runs. The status line every 5 s should show hub messages climbing, about 5 frames sent per second, and the rest counted as "merged before sending".
+- **Both boards must use the same `LINK_LEADER_SLOT_MS` and `TELEM_SCHEMA`.** A ground with a different layout version prints "not a telemetry frame for this layout".
 
 Placeholders at the top of `bridge.c`, to confirm with the embedded team:
 
@@ -157,8 +159,10 @@ Placeholders at the top of `bridge.c`, to confirm with the embedded team:
 | `CAN_BITRATE` | 500 kbit/s | Bus bit rate (1 Mbit/s isn't reachable with the 8 MHz crystal) |
 | `HUB_ID_MASK` / `HUB_ID_MATCH` | forward every ID | Which CAN IDs carry hub messages |
 | `GROUND_ID_BASE` | `0x200 + hub` | IDs for re-sending at the ground station, if it has a CAN bus |
+| `TELEM_SCHEMA` | `telem_schema_placeholder`: hubs 1–3 × 10 sensors, hub 4 × 8 | The real sensor order for all 38 sensors |
+| `LINK_LEADER_SLOT_MS` | 330 ms pod, 70 ms ground | What the ground needs to send the pod (70 ms fits 9 bytes per hop) |
 
-The bridge logic is in `src/can_bridge.c`, and host tests cover it: `tests/test_can_bridge.c`, plus a 60-second run in `tests/test_port_sx1262.c` with two hubs sending 20 messages a second through emulated radios.
+The bridge logic is in `src/can_bridge.c` and `src/telem_frame.c`, and host tests cover it: `tests/test_telem_frame.c`, `tests/test_can_bridge.c`, plus 60-second runs in `tests/test_port_sx1262.c` through emulated radios (frame mode: 4 hubs at 10 Hz, 330/70 split, commands going up).
 
 ## Status
 
@@ -185,8 +189,9 @@ Hopping as leader (0 dBm, beacon every dwell). One line per 20 s cycle:
 
 Measured send time is 2–3 ms longer than the calculated airtime. That's SPI and polling overhead at the 4 MHz system clock, within the link's 5 ms retune margin.
 
+**Since then (bench logs in `logs/`):** the two-board link, and the old per-hub bridge end to end through CAN loopback, both work on hardware.
+
 **Not yet verified on hardware:**
-- **Over-the-air reception and leader/follower sync:** needs a second radio setup.
+- **Frame mode and the 330/70 split.** Measured send time runs 2–3 ms over the calculated airtime, which leaves about 6 ms of slack for the pod's second frame each hop. If it misses, that hop carries one frame instead of two.
 - **The hop pattern on a spectrum analyzer or SDR.**
-- **The CAN transceiver and bus:** the loopback check stays inside the MCP2515, so this needs a second CAN node.
-- **The CAN bridge:** tested only in host emulation so far. The single-board demo (`DEMO=1`) is the first hardware step.
+- **The CAN transceiver and bus between two nodes:** the ground's frames got no acknowledgement on 10-25 (see `logs/README.md`).

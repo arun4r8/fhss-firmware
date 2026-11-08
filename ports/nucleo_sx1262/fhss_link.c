@@ -4,7 +4,8 @@
 
 /* 50 channels, 902.2 - 926.7 MHz, 500 kHz apart. A 125 kHz LoRa signal
  * leaves plenty of room between channels and stays under the 250 kHz
- * 20 dB bandwidth limit that allows the 50-channel / 400 ms rule. */
+ * 20 dB bandwidth limit that allows the 50-channel / 400 ms rule. The
+ * 250 kHz option (cfg.bandwidth_hz) still fits: see fhss_link.h. */
 #define LINK_BASE_FREQ_HZ   902200000u
 #define LINK_SPACING_HZ     500000u
 #define LINK_NUM_CHANNELS   50u
@@ -47,13 +48,34 @@ fhss_link_err_t fhss_link_init(fhss_link_t *l, const fhss_link_config_t *cfg)
 
     sx1262_lora_cfg_t lora = link_lora;
     lora.tx_power_dbm = cfg->tx_power_dbm;
+    if (cfg->bandwidth_hz) {
+        if (cfg->bandwidth_hz != 125000u && cfg->bandwidth_hz != 250000u) {
+            return FHSS_LINK_ERR_CONFIG; /* 500 kHz would not fit the 500 kHz channel plan */
+        }
+        lora.bandwidth_hz = cfg->bandwidth_hz;
+    }
     l->radio_err = sx1262_init(&l->radio, &lora, LINK_BASE_FREQ_HZ);
     if (l->radio_err != SX1262_OK) {
         return FHSS_LINK_ERR_RADIO;
     }
 
-    l->max_airtime_ms = (uint16_t)sx1262_airtime_ms(
-        &lora, FHSS_LINK_HEADER_LEN + FHSS_LINK_MAX_PAYLOAD);
+    uint16_t dwell = FHSS_DWELL_MS;
+    l->leader_slot_ms = cfg->leader_slot_ms ? cfg->leader_slot_ms : (uint16_t)(dwell / 2);
+    if (l->leader_slot_ms >= dwell) {
+        return FHSS_LINK_ERR_CONFIG;
+    }
+    /* longest packet that fits in this node's slot, margins at both ends */
+    uint32_t slot = l->cfg.leader ? l->leader_slot_ms : (uint32_t)(dwell - l->leader_slot_ms);
+    int max_len = -1;
+    for (int n = 0; n <= FHSS_LINK_MAX_PAYLOAD; n++) {
+        if (sx1262_airtime_ms(&lora, (uint8_t)(FHSS_LINK_HEADER_LEN + n)) + 2u * SLOT_MARGIN_MS <= slot) {
+            max_len = n;
+        }
+    }
+    if (max_len < 0) {
+        return FHSS_LINK_ERR_CONFIG; /* not even a bare header fits */
+    }
+    l->max_send_len = (uint8_t)max_len;
 
     fhss_config_t fc = {
         .base_freq_hz = LINK_BASE_FREQ_HZ,
@@ -62,7 +84,9 @@ fhss_link_err_t fhss_link_init(fhss_link_t *l, const fhss_link_config_t *cfg)
         .dwell_ms = FHSS_DWELL_MS,
         .seed = cfg->seed,
         .role = cfg->leader ? FHSS_ROLE_LEADER : FHSS_ROLE_FOLLOWER,
-        .guard_ms = (uint16_t)(l->max_airtime_ms + RETUNE_MARGIN_MS),
+        /* per-packet timing is checked in in_my_slot(); the core only
+         * keeps the retune time clear */
+        .guard_ms = RETUNE_MARGIN_MS,
         .rx_latency_ms = 0, /* compensated per packet from its airtime */
         .max_missed_hops = 3,
     };
@@ -80,7 +104,7 @@ fhss_link_err_t fhss_link_init(fhss_link_t *l, const fhss_link_config_t *cfg)
 
 bool fhss_link_send(fhss_link_t *l, const uint8_t *data, uint8_t len)
 {
-    if (len > FHSS_LINK_MAX_PAYLOAD || l->q_count == FHSS_LINK_QUEUE_LEN) {
+    if (len > l->max_send_len || l->q_count == FHSS_LINK_QUEUE_LEN) {
         l->stats.tx_dropped++;
         return false;
     }
@@ -142,14 +166,21 @@ static bool in_my_slot(const fhss_link_t *l, uint32_t now, uint32_t airtime)
     uint32_t dwell = l->fhss.cfg.dwell_ms;
     uint32_t until_hop = fhss_ms_until_hop(&l->fhss, now);
     uint32_t into = dwell - until_hop;
-    uint32_t half = dwell / 2;
+    uint32_t split = l->leader_slot_ms;
 
     if (l->cfg.leader) {
         /* Wait a little into the dwell so followers whose clocks run slightly
          * behind have already hopped when the packet starts. */
-        return into >= SLOT_MARGIN_MS && into + airtime + SLOT_MARGIN_MS <= half;
+        return into >= SLOT_MARGIN_MS && into + airtime + SLOT_MARGIN_MS <= split;
     }
-    return into >= half + SLOT_MARGIN_MS && until_hop > airtime + RETUNE_MARGIN_MS;
+    return into >= split + SLOT_MARGIN_MS && until_hop >= airtime + SLOT_MARGIN_MS;
+}
+
+bool fhss_link_slot_open(const fhss_link_t *l, uint8_t len)
+{
+    return len <= l->max_send_len &&
+           in_my_slot(l, HAL_GetTick(),
+                      sx1262_airtime_ms(&l->radio.cfg, (uint8_t)(FHSS_LINK_HEADER_LEN + len)));
 }
 
 static void try_transmit(fhss_link_t *l)

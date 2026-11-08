@@ -368,9 +368,12 @@ static void test_link_end_to_end(void)
 }
 
 
-static void test_link_max_payload(void)
+/* Both nodes keep their queues full of the longest payload their slot
+ * allows; check the packet rate each way and that every packet stays inside
+ * its node's slot on the leader's channel. */
+static void run_max_payload(uint32_t bw_hz, uint16_t leader_slot_ms, int want_lead_len,
+                            int want_fol_len, double want_down_per_s, double want_up_per_s)
 {
-    printf("max-size payloads (31 B) back to back: every packet inside one dwell\n");
     emu_reset_world();
     static sx1262_emu_t ea, eb;
     static fhss_link_t lead, fol;
@@ -380,40 +383,81 @@ static void test_link_max_payload(void)
     emu_add_radio(&ea, 0);
     emu_add_radio(&eb, 1);
     fhss_link_config_t lc = link_cfg(&ea, true, &lead_rx), fc = link_cfg(&eb, false, &fol_rx);
-    fhss_link_init(&lead, &lc);
-    fhss_link_init(&fol, &fc);
-
-    uint8_t big[FHSS_LINK_MAX_PAYLOAD];
+    lc.leader_slot_ms = fc.leader_slot_ms = leader_slot_ms;
+    lc.bandwidth_hz = fc.bandwidth_hz = bw_hz;
+    CHECK(fhss_link_init(&lead, &lc) == FHSS_LINK_OK && fhss_link_init(&fol, &fc) == FHSS_LINK_OK,
+          "init");
+    CHECK(lead.max_send_len == want_lead_len && fol.max_send_len == want_fol_len,
+          "longest payloads %u / %u, want %d / %d", lead.max_send_len, fol.max_send_len,
+          want_lead_len, want_fol_len);
+    uint8_t big[FHSS_LINK_MAX_PAYLOAD + 1];
     memset(big, 0x5A, sizeof(big));
+    CHECK(!fhss_link_send(&fol, big, (uint8_t)(fol.max_send_len + 1)), "oversize payload queued");
+
     uint32_t t_lock = 0;
     while (emu_now_ms < 90000) {
         if (fhss_link_locked(&fol) && !t_lock) {
             t_lock = emu_now_ms;
         }
         /* keep both queues topped up */
-        if (lead.q_count < FHSS_LINK_QUEUE_LEN) fhss_link_send(&lead, big, sizeof(big));
-        if (t_lock && fol.q_count < FHSS_LINK_QUEUE_LEN) fhss_link_send(&fol, big, sizeof(big));
+        if (lead.q_count < FHSS_LINK_QUEUE_LEN) fhss_link_send(&lead, big, lead.max_send_len);
+        if (t_lock && fol.q_count < FHSS_LINK_QUEUE_LEN) fhss_link_send(&fol, big, fol.max_send_len);
         fhss_link_poll(&lead);
         fhss_link_poll(&fol);
         emu_now_ms++;
     }
-    int straddle = 0, wrong = 0;
+    int straddle = 0, wrong = 0, out_of_slot = 0;
     for (int i = 0; i < emu_tx_log_n; i++) {
         const emu_tx_event_t *t = &emu_tx_log[i];
+        uint32_t hop = 0;
         for (int k = 0; k < ea.freq_log_n; k++) {
             if (ea.freq_log[k].t_ms > t->start_ms && ea.freq_log[k].t_ms < t->end_ms) straddle++;
+            if (ea.freq_log[k].t_ms <= t->start_ms) hop = ea.freq_log[k].t_ms;
         }
         wrong += t->rf_freq != freq_at(&ea, t->start_ms);
+        /* times relative to the leader's hop */
+        uint32_t s0 = t->start_ms - hop, s1 = t->end_ms - hop;
+        if (t->radio_id == 0 ? s1 > lead.leader_slot_ms : s0 < lead.leader_slot_ms || s1 > 400) out_of_slot++;
     }
     uint32_t locked_s = (90000 - t_lock) / 1000;
-    printf("  %d packets on air, leader->follower %d, follower->leader %d over %u s locked\n",
-           emu_tx_log_n, fol_rx.received, lead_rx.received, locked_s);
+    printf("  %d packets on air, leader->follower %d (%u B), follower->leader %d (%u B) over %u s locked\n",
+           emu_tx_log_n, fol_rx.received, lead.max_send_len, lead_rx.received, fol.max_send_len,
+           locked_s);
     CHECK(t_lock && straddle == 0 && wrong == 0, "straddle %d, wrong channel %d", straddle, wrong);
-    /* 2 full packets per node per dwell = 5 per second each way */
-    CHECK(fol_rx.received >= (int)(locked_s * 5) - 5, "leader->follower only %d", fol_rx.received);
-    CHECK(lead_rx.received >= (int)(locked_s * 5) - 5, "follower->leader only %d", lead_rx.received);
+    CHECK(out_of_slot == 0, "%d packets outside their node's slot", out_of_slot);
+    CHECK(fol_rx.received >= (int)(locked_s * want_down_per_s) - 5, "leader->follower only %d",
+          fol_rx.received);
+    CHECK(lead_rx.received >= (int)(locked_s * want_up_per_s) - 5, "follower->leader only %d",
+          lead_rx.received);
+    CHECK(fol.stats.rx_crc_errors == 0 && lead.stats.rx_crc_errors == 0, "crc errors");
     NO_VIOLATIONS(&ea);
     NO_VIOLATIONS(&eb);
+}
+
+static void test_link_max_payload(void)
+{
+    printf("max-size payloads back to back, 200/200 split: one 77 B packet per slot each way\n");
+    run_max_payload(0, 0, 77, 77, 2.5, 2.5);
+    printf("lopsided 330/70 split: two 77 B packets per hop down, one 9 B packet up\n");
+    run_max_payload(0, 330, 77, 9, 5.0, 2.5);
+    printf("250 kHz, 200/200 split: two 77 B packets per slot each way\n");
+    run_max_payload(250000, 0, 77, 77, 5.0, 5.0);
+    printf("250 kHz, 340/60 split: four 77 B packets per hop down, one 30 B packet up\n");
+    run_max_payload(250000, 340, 77, 30, 10.0, 2.5);
+    printf("split leaving no room for a packet is refused\n");
+    emu_reset_world();
+    static sx1262_emu_t e;
+    static fhss_link_t l;
+    emu_add_radio(&e, 0);
+    fhss_link_config_t c = link_cfg(&e, false, NULL);
+    c.leader_slot_ms = 380; /* 20 ms left: not even a 6-byte header fits */
+    CHECK(fhss_link_init(&l, &c) == FHSS_LINK_ERR_CONFIG, "follower with a 20 ms slot accepted");
+    c.leader_slot_ms = 400;
+    c.leader = true;
+    CHECK(fhss_link_init(&l, &c) == FHSS_LINK_ERR_CONFIG, "leader slot of a whole dwell accepted");
+    c.leader_slot_ms = 0;
+    c.bandwidth_hz = 500000;
+    CHECK(fhss_link_init(&l, &c) == FHSS_LINK_ERR_CONFIG, "500 kHz accepted on 500 kHz channels");
 }
 
 static void test_foreign_network_ignored(void)
@@ -580,6 +624,175 @@ static void test_can_bridge_over_link(void)
     NO_VIOLATIONS(&eb);
 }
 
+/* ---- frame mode over the link: 38 sensors, lopsided split ------------- */
+
+
+typedef struct {
+    fhss_link_t *link;
+    can_bridge_t bridge;
+    int frames, bad, cmds;
+    uint32_t max_age_ms;
+} frame_node_t;
+
+static bool frame_radio_idle(void *user)
+{
+    frame_node_t *n = user;
+    /* build the frame only when it can go out at once, so it is fresh */
+    return n->link->q_count == 0 &&
+           fhss_link_slot_open(n->link, (uint8_t)telem_frame_length(&telem_schema_placeholder));
+}
+
+static bool frame_radio_send(void *user, const uint8_t *data, uint8_t len)
+{
+    return fhss_link_send(((frame_node_t *)user)->link, data, len);
+}
+
+/* ground: every reading is its hub's send time in units of 10 ms */
+static void frame_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi)
+{
+    (void)rssi;
+    frame_node_t *n = user;
+    if (len == 0) {
+        return;
+    }
+    uint16_t v[38];
+    if (!can_bridge_frame_from_radio(&n->bridge, data, len, v)) {
+        n->bad++;
+        return;
+    }
+    n->frames++;
+    for (int i = 0; i < 38; i++) {
+        if (v[i] == TELEM_FAULT) {
+            continue; /* hub not heard yet */
+        }
+        uint32_t age = emu_now_ms - 10u * v[i];
+        n->max_age_ms = age > n->max_age_ms ? age : n->max_age_ms;
+    }
+}
+
+/* pod: commands from the ground */
+static void frame_pod_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi)
+{
+    (void)rssi;
+    frame_node_t *n = user;
+    if (len >= 3 && memcmp(data, "CMD", 3) == 0) {
+        n->cmds++;
+    }
+}
+
+/* Hubs 1-4 each send their placeholder sensors every 100 ms, 25 ms apart. */
+static uint32_t fhub_next_ms;
+static int fhub_msgs;
+
+static void frame_hub_traffic(void *user)
+{
+    frame_node_t *pod = user;
+    for (; fhub_next_ms <= emu_now_ms; fhub_next_ms += 25) {
+        uint8_t hub = (uint8_t)(1 + (fhub_next_ms / 25) % 4);
+        can_hub_msg_t m = {.hub = hub, .count = hub == 4 ? 8 : 10};
+        for (uint8_t i = 0; i < m.count; i++) {
+            m.sensor[i] = (can_sensor_t){.type = 1, .id = i, .reading = (uint16_t)(fhub_next_ms / 10)};
+        }
+        uint8_t buf[CAN_MSG_MAX_BYTES], data[CAN_MSG_MAX_FRAMES][8], dlc[CAN_MSG_MAX_FRAMES];
+        uint8_t nf = can_msg_to_frames(buf, can_msg_encode(&m, buf, sizeof(buf)), data, dlc);
+        for (uint8_t f = 0; f < nf; f++) {
+            can_bridge_on_frame(&pod->bridge, (uint16_t)(0x100 + hub), data[f], dlc[f], emu_now_ms);
+        }
+        fhub_msgs++;
+    }
+}
+
+static void run_frames_over_link(uint32_t bw_hz, uint16_t slot_ms, uint8_t cmd_len,
+                                 int want_per_s, uint32_t max_age_ms)
+{
+    emu_reset_world();
+    static sx1262_emu_t ea, eb;
+    static fhss_link_t pod_link, gnd_link;
+    static frame_node_t pod, gnd;
+    memset(&pod, 0, sizeof(pod));
+    memset(&gnd, 0, sizeof(gnd));
+    pod.link = &pod_link;
+    gnd.link = &gnd_link;
+    emu_add_radio(&ea, 0);
+    emu_add_radio(&eb, 1);
+
+    can_bridge_config_t bc = {
+        .rx_id_mask = 0x7F0, .rx_id_match = 0x100, .tx_id_base = 0x200,
+        .max_payload = FHSS_LINK_MAX_PAYLOAD, .schema = &telem_schema_placeholder,
+        .radio_idle = frame_radio_idle, .radio_send = frame_radio_send,
+    };
+    bc.user = &pod;
+    CHECK(can_bridge_init(&pod.bridge, &bc), "pod bridge init");
+    bc.user = &gnd;
+    CHECK(can_bridge_init(&gnd.bridge, &bc), "ground bridge init");
+
+    fhss_link_config_t pc = link_cfg(&ea, true, NULL), gc = link_cfg(&eb, false, NULL);
+    pc.leader_slot_ms = gc.leader_slot_ms = slot_ms;
+    pc.bandwidth_hz = gc.bandwidth_hz = bw_hz;
+    pc.on_rx = frame_pod_on_rx;
+    pc.user = &pod;
+    pc.tx_wait_hook = frame_hub_traffic;
+    gc.on_rx = frame_on_rx;
+    gc.user = &gnd;
+    CHECK(fhss_link_init(&pod_link, &pc) == FHSS_LINK_OK, "pod link init");
+    CHECK(fhss_link_init(&gnd_link, &gc) == FHSS_LINK_OK, "ground link init");
+
+    uint32_t t_lock = 0, next_cmd = 0;
+    int cmds_sent = 0;
+    fhub_next_ms = 0;
+    fhub_msgs = 0;
+    while (emu_now_ms < 60000) {
+        if (!t_lock && fhss_link_locked(&gnd_link)) {
+            t_lock = emu_now_ms;
+            next_cmd = emu_now_ms;
+        }
+        /* the ground sends a command filling its slot every 400 ms once locked */
+        if (t_lock && emu_now_ms >= next_cmd) {
+            uint8_t cmd[FHSS_LINK_MAX_PAYLOAD];
+            memset(cmd, 'x', sizeof(cmd));
+            memcpy(cmd, "CMD", 3);
+            if (fhss_link_send(&gnd_link, cmd, cmd_len)) {
+                cmds_sent++;
+            }
+            next_cmd += 400;
+        }
+        frame_hub_traffic(&pod);
+        can_bridge_poll(&pod.bridge);
+        fhss_link_poll(&pod_link);
+        fhss_link_poll(&gnd_link);
+        emu_now_ms++;
+    }
+    uint32_t locked_s = t_lock ? (60000 - t_lock) / 1000 : 0;
+    printf("  %d hub messages on CAN, %u frames sent, %d received over %u s locked (%.1f/s), "
+           "%u missed, oldest reading %u ms; ground->pod commands %d/%d\n",
+           fhub_msgs, pod.bridge.stats.messages_sent, gnd.frames, locked_s,
+           locked_s ? (double)gnd.frames / locked_s : 0.0, gnd.bridge.stats.frames_missed,
+           gnd.max_age_ms, pod.cmds, cmds_sent);
+    CHECK(t_lock, "ground never locked");
+    CHECK(gnd.bad == 0 && gnd.bridge.stats.radio_bad == 0, "%d bad frames", gnd.bad);
+    CHECK(pod.bridge.stats.messages_in == (uint32_t)fhub_msgs && pod.bridge.stats.reasm_errors == 0 &&
+          pod.bridge.snap.unmapped == 0, "pod took %u of %d messages, %u unmapped",
+          pod.bridge.stats.messages_in, fhub_msgs, pod.bridge.snap.unmapped);
+    CHECK(pod_link.stats.tx_dropped == 0 && pod.bridge.stats.radio_refused == 0, "radio refused");
+    /* full 38-sensor frames per second, from frames per hop */
+    CHECK(gnd.frames >= (int)locked_s * want_per_s - 2, "only %d frames in %u s", gnd.frames, locked_s);
+    CHECK(gnd.bridge.stats.frames_missed <= 1, "ground missed %u frames", gnd.bridge.stats.frames_missed);
+    /* about hub period (100 ms) + frame airtime + a few ms of slack */
+    CHECK(gnd.max_age_ms <= max_age_ms, "oldest delivered reading %u ms", gnd.max_age_ms);
+    CHECK(cmds_sent >= (int)locked_s * 2 && pod.cmds >= cmds_sent - 1, "commands %d of %d",
+          pod.cmds, cmds_sent);
+    NO_VIOLATIONS(&ea);
+    NO_VIOLATIONS(&eb);
+}
+
+static void test_frames_over_link(void)
+{
+    printf("frame mode: 4 hubs (38 sensors) -> one frame per packet -> 330/70 link (60 s)\n");
+    run_frames_over_link(0, 330, 9, 5, 270);
+    printf("frame mode at 250 kHz, 340/60 split: 4 frames per hop, 30 B commands (60 s)\n");
+    run_frames_over_link(250000, 340, 30, 10, 190);
+}
+
 int main(void)
 {
     test_freq_and_airtime();
@@ -591,6 +804,7 @@ int main(void)
     test_link_max_payload();
     test_foreign_network_ignored();
     test_can_bridge_over_link();
+    test_frames_over_link();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

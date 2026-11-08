@@ -9,7 +9,13 @@ bool can_bridge_init(can_bridge_t *b, const can_bridge_config_t *cfg)
     if (!cfg->radio_idle || !cfg->radio_send || cfg->max_payload < 4) {
         return false;
     }
+    if (cfg->schema && (!telem_schema_valid(cfg->schema) ||
+                        telem_frame_length(cfg->schema) > cfg->max_payload)) {
+        return false;
+    }
     b->cfg = *cfg;
+    telem_snapshot_init(&b->snap);
+    b->last_seq = -1;
     return true;
 }
 
@@ -60,6 +66,18 @@ void can_bridge_on_frame(can_bridge_t *b, uint16_t id, const uint8_t *data, uint
         break;
     case CAN_REASM_DONE:
         b->stats.messages_in++;
+        if (b->cfg.schema) {
+            can_hub_msg_t m;
+            if (!can_msg_decode(s->reasm.buf, s->reasm.len, &m)) {
+                b->stats.reasm_errors++;
+            } else {
+                if (b->snap.updated) {
+                    b->stats.superseded++; /* the frame not yet sent gets newer data */
+                }
+                telem_snapshot_update(&b->snap, b->cfg.schema, &m);
+            }
+            break;
+        }
         if (s->pending) {
             b->stats.superseded++;
         }
@@ -74,6 +92,20 @@ bool can_bridge_poll(can_bridge_t *b)
 {
     if (!b->cfg.radio_idle(b->cfg.user)) {
         return false;
+    }
+    if (b->cfg.schema) {
+        if (!b->snap.updated) {
+            return false;
+        }
+        uint8_t frame[1 + 2 * TELEM_MAX_SENSORS];
+        size_t n = telem_frame_build(&b->snap, b->cfg.schema, frame, sizeof(frame));
+        if (!b->cfg.radio_send(b->cfg.user, frame, (uint8_t)n)) {
+            b->stats.radio_refused++;
+            return false;
+        }
+        b->stats.messages_sent++;
+        b->stats.chunks_sent++;
+        return true;
     }
     for (int n = 0; n < CAN_BRIDGE_MAX_SENDERS; n++) {
         int i = (b->next_sender + n) % CAN_BRIDGE_MAX_SENDERS;
@@ -110,4 +142,20 @@ uint8_t can_bridge_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_t l
     b->stats.radio_in++;
     *id = (uint16_t)((b->cfg.tx_id_base + msg->hub) & 0x7FF);
     return can_msg_to_frames(payload, len, data, dlc);
+}
+
+bool can_bridge_frame_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_t len,
+                                 uint16_t *readings)
+{
+    uint8_t seq;
+    if (!b->cfg.schema || !telem_frame_decode(b->cfg.schema, payload, len, readings, &seq)) {
+        b->stats.radio_bad++;
+        return false;
+    }
+    b->stats.radio_in++;
+    if (b->last_seq >= 0) {
+        b->stats.frames_missed += (uint32_t)((seq - b->last_seq - 1) & 0x0F);
+    }
+    b->last_seq = seq;
+    return true;
 }

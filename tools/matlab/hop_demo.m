@@ -103,7 +103,7 @@ function result = hop_demo(duration_s, ports)
                             g_t(end + 1) = v(1); g_ch(end + 1) = v(3); g_i(end + 1) = v(2); %#ok<AGROW>
                         end
                     otherwise
-                        if startsWith(line, "rx hub")
+                        if startsWith(line, ["rx hub", "rx frame"])
                             last_msg = line;
                         end
                 end

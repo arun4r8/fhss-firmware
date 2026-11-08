@@ -12,7 +12,7 @@ CORE_SRC := src/fhss.c
 PORT_SRC := $(PORT)/sx1262.c $(PORT)/fhss_link.c
 EMU_SRC  := $(MOCKS)/sx1262_emu.c
 CAN_DRV  := drivers/mcp2515
-BRIDGE_SRC := src/can_bridge.c src/can_msg.c
+BRIDGE_SRC := src/can_bridge.c src/can_msg.c src/telem_frame.c
 
 .PHONY: all test clean
 
@@ -22,6 +22,7 @@ $(BUILD)/fhss.o: $(CORE_SRC) include/fhss.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $(CORE_SRC) -o $@
 	$(CC) $(CFLAGS) -fsyntax-only src/can_msg.c
 	$(CC) $(CFLAGS) -fsyntax-only src/can_bridge.c
+	$(CC) $(CFLAGS) -fsyntax-only src/telem_frame.c
 	$(CC) $(CFLAGS) $(MOCKHAL) -I$(MOCKS) -I$(CAN_DRV) -fsyntax-only $(CAN_DRV)/mcp2515.c
 
 # Port sources under the strict flags, against the mock HAL header.
@@ -35,16 +36,20 @@ $(BUILD)/test_fhss: $(CORE_SRC) tests/test_fhss.c include/fhss.h | $(BUILD)
 	$(CC) $(CFLAGS) $(TESTFLAGS) $(CORE_SRC) tests/test_fhss.c -o $@
 
 $(BUILD)/test_port: $(CORE_SRC) $(PORT_SRC) $(EMU_SRC) $(BRIDGE_SRC) tests/test_port_sx1262.c \
-		$(PORT)/*.h $(MOCKS)/*.h include/can_bridge.h | $(BUILD)
+		$(PORT)/*.h $(MOCKS)/*.h include/can_bridge.h include/telem_frame.h | $(BUILD)
 	$(CC) $(CFLAGS) $(TESTFLAGS) $(MOCKHAL) -I$(PORT) -I$(MOCKS) \
 		$(CORE_SRC) $(PORT_SRC) $(EMU_SRC) $(BRIDGE_SRC) tests/test_port_sx1262.c -o $@
 
 $(BUILD)/test_can_msg: src/can_msg.c tests/test_can_msg.c include/can_msg.h | $(BUILD)
 	$(CC) $(CFLAGS) $(TESTFLAGS) src/can_msg.c tests/test_can_msg.c -o $@
 
-$(BUILD)/test_can_bridge: src/can_bridge.c src/can_msg.c tests/test_can_bridge.c include/can_bridge.h \
-		include/can_msg.h | $(BUILD)
-	$(CC) $(CFLAGS) $(TESTFLAGS) src/can_bridge.c src/can_msg.c tests/test_can_bridge.c -o $@
+$(BUILD)/test_can_bridge: $(BRIDGE_SRC) tests/test_can_bridge.c include/can_bridge.h \
+		include/can_msg.h include/telem_frame.h | $(BUILD)
+	$(CC) $(CFLAGS) $(TESTFLAGS) $(BRIDGE_SRC) tests/test_can_bridge.c -o $@
+
+$(BUILD)/test_telem_frame: src/telem_frame.c src/can_msg.c tests/test_telem_frame.c \
+		include/telem_frame.h include/can_msg.h | $(BUILD)
+	$(CC) $(CFLAGS) $(TESTFLAGS) src/telem_frame.c src/can_msg.c tests/test_telem_frame.c -o $@
 
 $(BUILD)/test_mcp2515: $(CAN_DRV)/mcp2515.c $(CAN_DRV)/mcp2515.h $(MOCKS)/mcp2515_emu.c \
 		$(MOCKS)/mcp2515_emu.h tests/test_mcp2515.c | $(BUILD)
@@ -61,10 +66,11 @@ $(BUILD)/matlab_ref.stamp: $(CORE_SRC) include/fhss.h tools/matlab/gen_ref_seque
 	touch $@
 
 test: $(BUILD)/matlab_ref.stamp $(BUILD)/fhss.o $(BUILD)/port.stamp $(BUILD)/test_fhss $(BUILD)/test_port \
-		$(BUILD)/test_can_msg $(BUILD)/test_can_bridge $(BUILD)/test_mcp2515
+		$(BUILD)/test_can_msg $(BUILD)/test_telem_frame $(BUILD)/test_can_bridge $(BUILD)/test_mcp2515
 	./$(BUILD)/test_fhss
 	./$(BUILD)/test_port
 	./$(BUILD)/test_can_msg
+	./$(BUILD)/test_telem_frame
 	./$(BUILD)/test_can_bridge
 	./$(BUILD)/test_mcp2515
 

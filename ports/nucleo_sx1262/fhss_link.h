@@ -1,10 +1,12 @@
 /*
  * fhss_link.h - Frequency-hopping packet link: fhss core + SX1262 radio.
  *
- * Each 400 ms dwell is split in two halves:
- *   first half   leader transmits (always at least one beacon per dwell)
- *   second half  followers transmit (only once locked)
- * ending guard_ms before the hop so no packet straddles a channel change.
+ * Each 400 ms dwell is split in two slots:
+ *   first leader_slot_ms   leader transmits (always at least one beacon per dwell)
+ *   the rest               followers transmit (only once locked)
+ * Default is half and half. Every packet must start and end inside its
+ * node's slot with SLOT_MARGIN_MS to spare, so none straddles a hop. The
+ * split must be the same on every node.
  *
  * On-air packet: [net_id][flags][fhss sync x4][payload 0..FHSS_LINK_MAX_PAYLOAD]
  */
@@ -17,7 +19,7 @@
 #include "fhss.h"
 #include "sx1262.h"
 
-#define FHSS_LINK_MAX_PAYLOAD 31 /* one 10-sensor hub message (can_msg.h) */
+#define FHSS_LINK_MAX_PAYLOAD 77 /* one 38-sensor telemetry frame (telem_frame.h) */
 #define FHSS_LINK_QUEUE_LEN   8
 #define FHSS_LINK_HEADER_LEN  (2 + FHSS_SYNC_WIRE_SIZE)
 
@@ -39,6 +41,12 @@ typedef struct {
     uint32_t seed;       /* hop sequence seed, same on every node */
     uint8_t net_id;      /* drops packets from other networks on our channels */
     int8_t tx_power_dbm; /* -9..22 */
+    uint16_t leader_slot_ms; /* leader's share of each dwell; 0 = half */
+    uint32_t bandwidth_hz;   /* LoRa bandwidth: 0 = 125 kHz, or 250000. Same on every
+                              * node. 250 kHz has a 20 dB bandwidth of 250 kHz or
+                              * more, so FCC 15.247(a)(1)(i) then asks for >= 25
+                              * channels and <= 0.4 s per channel in 10 s, which
+                              * 50 channels at 500 kHz / 400 ms / 20 s also meet. */
 
     fhss_link_rx_cb on_rx;
     void *user;
@@ -60,7 +68,8 @@ typedef struct {
     fhss_link_config_t cfg;
     sx1262_t radio;
     fhss_t fhss;
-    uint16_t max_airtime_ms;
+    uint16_t leader_slot_ms;
+    uint8_t max_send_len; /* longest payload that fits in this node's slot */
     uint16_t last_hop_index;
     bool sent_this_dwell;
     struct {
@@ -84,9 +93,15 @@ fhss_link_err_t fhss_link_init(fhss_link_t *l, const fhss_link_config_t *cfg);
 /* Call from the main loop as often as possible (at least every 1-2 ms). */
 void fhss_link_poll(fhss_link_t *l);
 
-/* Queue a payload; it goes out in this node's next free slot. */
+/* Queue a payload; it goes out in this node's next free slot. Refused if
+ * the queue is full or it is longer than max_send_len. */
 bool fhss_link_send(fhss_link_t *l, const uint8_t *data, uint8_t len);
 
 bool fhss_link_locked(const fhss_link_t *l);
+
+/* true if a payload of len bytes could start right now in this node's slot.
+ * Lets the caller build time-sensitive data at the last moment: queue it
+ * when this turns true and the next fhss_link_poll() sends it. */
+bool fhss_link_slot_open(const fhss_link_t *l, uint8_t len);
 
 #endif /* FHSS_LINK_H */
