@@ -25,7 +25,8 @@ The suites are host C programs that run the real firmware code against emulated 
 | 12 | `c3e7d06` | 10-11 | CAN bridge: hub messages → hopping link → ground | 64641 | 1878 | 445 | 35 | 75 |
 | 13 | `97b0a8b` | 10-18 | MATLAB hop tools (`make test` also checks the MATLAB reference sequences) | same | same | same | same | same |
 | 14 | `97b9f15` | 10-25 | `flash-swd` target (OpenOCD) | same | same | same | same | same |
-| — | this commit | 11-01 | Real-bus test mode (`ROLE=ground HUB=1`), live MATLAB demo, logs | 64641 | 1878 | 445 | 35 | 75 |
+| 15–16 | `53a07a4`, `7b9cb03` | 11-01 | Real-bus test mode (`ROLE=ground HUB=1`), live MATLAB demo, logs | 64641 | 1878 | 445 | 35 | 75 |
+| 17–18 | today's commits | 11-08 | 38-sensor tag-free frame (new `telem_frame` suite: 56 checks), 330/70 split, 250 kHz option | 64641 | 1944 | 445 | 54 | 75 |
 
 What each suite change added, from diffing the test output between commits:
 
@@ -40,6 +41,11 @@ What each suite change added, from diffing the test output between commits:
   - Max-size 31 B payloads back to back: 900 packets, each inside one dwell.
   - Hub message format: the document's 10-sensor example (31 B, 4 CAN frames), bit layout, bad messages, 0–39 sensors, recovery from a lost frame.
   - MCP2515: bit timing, init, loopback, two-node bus, filters, rollover.
+- **#17–18 (11-08):**
+  - Frame format tests: 38 sensors → 77-byte frame, round trip, faults and unknown sensors, layout version and sequence.
+  - Bridge frame mode: one frame from 4 hubs, sent only when something changed, newest data wins, missed frames counted.
+  - Link: max-size packets at 200/200 and 330/70 (5 frames/s down, 9 B up), and at 250 kHz (200/200, and 340/60: 10 frames/s down, 30 B up).
+  - 60 s end to end, 4 hubs at 10 Hz: 125 kHz + 330/70 gives 5.1 frames/s, oldest reading 249 ms; 250 kHz + 340/60 gives 10.2 frames/s, oldest 177 ms. 0 frames missed in both. Host emulation only.
 - **#12:**
   - CAN bridge unit tests: config, 10- and 39-sensor messages, ID filter, newest message per sender when the radio is slow, interleaved hubs, slot reuse.
   - A 60 s end-to-end run in the port suite: 2 hubs, 2400 CAN messages, 300 delivered over the link, oldest reading 333 ms.
@@ -61,7 +67,7 @@ Hardware: two NUCLEO-WL55JC2 boards with SX1262 shields, plus HW-184 MCP2515 mod
 | 10-25 PM | **End to end:** CAN (loopback) → bridge → hopping radio → ground decode | **232/232 messages decoded, 0 malformed, 0 CRC errors**, RSSI −21 dBm at 0 dBm TX | 19:30 |
 | 10-25 PM | Ground board self-test (second HW-184) | All checks passed, including CAN loopback | 20:53 |
 | 10-25 PM | Real CAN bus between the boards (ground as fake hub 5 → pod) | **Not working yet.** Ground TX gets no ACK (EFLG 0x15, then 0x0B after a re-wire); the pod sees 0 frames. Suspects: ground MCP2515↔transceiver TX/RX link, transceiver power/SLNT, H/L wiring. Radio link stayed locked throughout. | 20:54–21:14 |
-| 10-25 PM | MATLAB live demo, 15 s, both boards | 38 hops, **75 sent / 75 received (100%)**, 0 off-sequence | `plots/hop_demo_*.png` |
+| 10-25 PM | MATLAB live demo, 3 runs × 15 s, both boards | 38 hops each, **222 / 223 received (99.6%)**: 75/75, 73/74, 74/74; 0 off-sequence | `plots/hop_demo_*.png` (212054, 212758, 212929) |
 
 Notes for reading the captures:
 
