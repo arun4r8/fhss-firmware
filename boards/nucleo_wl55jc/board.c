@@ -1,8 +1,23 @@
 #include "board.h"
 
-/* The WL55 comes out of reset on the 4 MHz MSI. That is plenty for polled
- * SPI and a 115200 baud console, and avoids touching flash wait states. */
+/* The WL55 comes out of reset on the 4 MHz MSI; board_init() switches the
+ * MSI to 48 MHz (range 11), the most it can do, so the pod can drain the
+ * CAN controller and still start its next frame on time. Reset leaves the
+ * core regulator in range 1, which allows 48 MHz; flash needs 2 wait states
+ * at that speed. All bus prescalers stay at 1, so PCLK = 48 MHz. */
+#define CORE_HZ 48000000u
 uint32_t SystemCoreClock = 4000000u;
+
+static void clock_48mhz(void)
+{
+    FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | 2u | FLASH_ACR_PRFTEN | FLASH_ACR_ICEN | FLASH_ACR_DCEN;
+    while ((FLASH->ACR & FLASH_ACR_LATENCY) != 2u) {
+    }
+    RCC->CR = (RCC->CR & ~RCC_CR_MSIRANGE) | RCC_CR_MSIRANGE_11 | RCC_CR_MSIRGSEL;
+    while (!(RCC->CR & RCC_CR_MSIRDY)) {
+    }
+    SystemCoreClock = CORE_HZ;
+}
 
 SPI_HandleTypeDef board_spi1 = {SPI1};
 
@@ -30,6 +45,7 @@ static void output(GPIO_TypeDef *port, uint32_t pin_num, int high)
 
 void board_init(void)
 {
+    clock_48mhz();
     RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN;
     RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
     RCC->APB1ENR2 |= RCC_APB1ENR2_LPUART1EN;
@@ -53,18 +69,19 @@ void board_init(void)
     /* MCP2515 chip-select idles high so it stays off the shared SPI bus */
     output(GPIOB, 5, 1); /* D4 */
 
-    /* SPI1 on PA5/PA6/PA7, AF5: master, mode 0, software NSS, PCLK/2 = 2 MHz */
+    /* SPI1 on PA5/PA6/PA7, AF5: master, mode 0, software NSS, PCLK/16 = 3 MHz
+     * (SX1262 allows 16 MHz, MCP2515 10 MHz; kept low for breadboard jumpers) */
     pin_mode(GPIOA, 5, MODE_AF, 5);
     pin_mode(GPIOA, 6, MODE_AF, 5);
     pin_mode(GPIOA, 7, MODE_AF, 5);
-    SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI;
+    SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR_1 | SPI_CR1_BR_0;
     SPI1->CR2 = (7u << 8) /* DS = 8-bit */ | SPI_CR2_FRXTH;
     SPI1->CR1 |= SPI_CR1_SPE;
 
-    /* LPUART1 on PA2 (TX) / PA3 (RX), AF8, 115200 from the 4 MHz PCLK1 */
+    /* LPUART1 on PA2 (TX) / PA3 (RX), AF8, 115200 from the 48 MHz PCLK1 */
     pin_mode(GPIOA, 2, MODE_AF, 8);
     pin_mode(GPIOA, 3, MODE_AF, 8);
-    LPUART1->BRR = (256u * 4000000u + 115200u / 2u) / 115200u;
+    LPUART1->BRR = (uint32_t)((256ull * CORE_HZ + 115200u / 2u) / 115200u);
     LPUART1->CR1 = USART_CR1_FIFOEN | USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
 }
 

@@ -23,6 +23,7 @@ $(BUILD)/fhss.o: $(CORE_SRC) include/fhss.h | $(BUILD)
 	$(CC) $(CFLAGS) -fsyntax-only src/can_msg.c
 	$(CC) $(CFLAGS) -fsyntax-only src/can_bridge.c
 	$(CC) $(CFLAGS) -fsyntax-only src/telem_frame.c
+	$(CC) $(CFLAGS) -fsyntax-only src/range_test.c
 	$(CC) $(CFLAGS) $(MOCKHAL) -I$(MOCKS) -I$(CAN_DRV) -fsyntax-only $(CAN_DRV)/mcp2515.c
 
 # Port sources under the strict flags, against the mock HAL header.
@@ -47,6 +48,9 @@ $(BUILD)/test_can_bridge: $(BRIDGE_SRC) tests/test_can_bridge.c include/can_brid
 		include/can_msg.h include/telem_frame.h | $(BUILD)
 	$(CC) $(CFLAGS) $(TESTFLAGS) $(BRIDGE_SRC) tests/test_can_bridge.c -o $@
 
+$(BUILD)/test_range: src/range_test.c tests/test_range.c include/range_test.h | $(BUILD)
+	$(CC) $(CFLAGS) $(TESTFLAGS) src/range_test.c tests/test_range.c -o $@
+
 $(BUILD)/test_telem_frame: src/telem_frame.c src/can_msg.c tests/test_telem_frame.c \
 		include/telem_frame.h include/can_msg.h | $(BUILD)
 	$(CC) $(CFLAGS) $(TESTFLAGS) src/telem_frame.c src/can_msg.c tests/test_telem_frame.c -o $@
@@ -66,11 +70,12 @@ $(BUILD)/matlab_ref.stamp: $(CORE_SRC) include/fhss.h tools/matlab/gen_ref_seque
 	touch $@
 
 test: $(BUILD)/matlab_ref.stamp $(BUILD)/fhss.o $(BUILD)/port.stamp $(BUILD)/test_fhss $(BUILD)/test_port \
-		$(BUILD)/test_can_msg $(BUILD)/test_telem_frame $(BUILD)/test_can_bridge $(BUILD)/test_mcp2515
+		$(BUILD)/test_can_msg $(BUILD)/test_telem_frame $(BUILD)/test_range $(BUILD)/test_can_bridge $(BUILD)/test_mcp2515
 	./$(BUILD)/test_fhss
 	./$(BUILD)/test_port
 	./$(BUILD)/test_can_msg
 	./$(BUILD)/test_telem_frame
+	./$(BUILD)/test_range
 	./$(BUILD)/test_can_bridge
 	./$(BUILD)/test_mcp2515
 

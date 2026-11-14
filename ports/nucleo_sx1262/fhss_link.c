@@ -130,16 +130,27 @@ static void handle_rx(fhss_link_t *l)
 {
     uint8_t buf[FHSS_LINK_HEADER_LEN + FHSS_LINK_MAX_PAYLOAD];
     int16_t rssi = 0;
-    int n = sx1262_read_packet(&l->radio, buf, sizeof(buf), &rssi);
+    int8_t snr_q4 = 0;
+    bool crc_ok = true;
+    int n = sx1262_read_packet_ex(&l->radio, buf, sizeof(buf), &rssi, &snr_q4, &crc_ok);
     uint32_t rx_done_ms = HAL_GetTick();
 
     if (n == 0) {
         return;
     }
     if (n == SX1262_ERR_CRC) {
-        l->stats.rx_crc_errors++;
+        l->stats.rx_crc_errors++; /* bad LoRa header: no payload */
+        l->stats.rx_header_errors++;
         return;
     }
+    if (n > 0 && !crc_ok) {
+        l->stats.rx_crc_errors++;
+        if (l->cfg.on_rx_bad) {
+            l->cfg.on_rx_bad(l->cfg.user, buf, (uint8_t)n, rssi, snr_q4);
+        }
+        return;
+    }
+    l->last_snr_q4 = snr_q4;
     if (n < FHSS_LINK_HEADER_LEN || buf[0] != l->cfg.net_id) {
         l->stats.rx_foreign++;
         return;

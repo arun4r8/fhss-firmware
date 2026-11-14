@@ -388,7 +388,8 @@ sx1262_err_t sx1262_send(sx1262_t *r, const uint8_t *data, uint8_t len)
     return err;
 }
 
-int sx1262_read_packet(sx1262_t *r, uint8_t *buf, uint8_t max, int16_t *rssi_dbm)
+int sx1262_read_packet_ex(sx1262_t *r, uint8_t *buf, uint8_t max, int16_t *rssi_dbm,
+                          int8_t *snr_q4, bool *crc_ok)
 {
     uint16_t irq = get_irq(r);
     if (irq & IRQ_HEADER_ERR) {
@@ -399,8 +400,8 @@ int sx1262_read_packet(sx1262_t *r, uint8_t *buf, uint8_t max, int16_t *rssi_dbm
         return 0;
     }
     clear_irq(r, IRQ_ALL);
-    if (irq & IRQ_CRC_ERR) {
-        return SX1262_ERR_CRC;
+    if (crc_ok) {
+        *crc_ok = !(irq & IRQ_CRC_ERR);
     }
 
     uint8_t st[3];
@@ -416,12 +417,24 @@ int sx1262_read_packet(sx1262_t *r, uint8_t *buf, uint8_t max, int16_t *rssi_dbm
         buf[i] = tmp[1 + i];
     }
 
-    if (rssi_dbm) {
-        uint8_t ps[4];
+    if (rssi_dbm || snr_q4) {
+        uint8_t ps[4]; /* status, RssiPkt (-dBm x2), SnrPkt (dB x4, signed), SignalRssiPkt */
         query(r, OP_GET_PACKET_STATUS, 0, 0, ps, 4);
-        *rssi_dbm = (int16_t)(-(int16_t)ps[1] / 2);
+        if (rssi_dbm) {
+            *rssi_dbm = (int16_t)(-(int16_t)ps[1] / 2);
+        }
+        if (snr_q4) {
+            *snr_q4 = (int8_t)ps[2];
+        }
     }
     return len;
+}
+
+int sx1262_read_packet(sx1262_t *r, uint8_t *buf, uint8_t max, int16_t *rssi_dbm)
+{
+    bool ok = true;
+    int n = sx1262_read_packet_ex(r, buf, max, rssi_dbm, 0, &ok);
+    return (n > 0 && !ok) ? SX1262_ERR_CRC : n;
 }
 
 sx1262_err_t sx1262_check_pll(sx1262_t *r, uint32_t freq_hz)

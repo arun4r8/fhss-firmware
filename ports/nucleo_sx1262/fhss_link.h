@@ -60,12 +60,16 @@ typedef struct {
     uint8_t (*fill)(void *user, uint8_t *buf, uint8_t max);
     /* optional: called after each transmission (payload length, start ms) */
     void (*on_tx)(void *user, uint8_t len, uint32_t start_ms);
+    /* optional: a packet whose payload CRC failed, whole packet including
+     * the (possibly corrupted) header, for bit-error counting */
+    void (*on_rx_bad)(void *user, const uint8_t *pkt, uint8_t len, int16_t rssi_dbm, int8_t snr_q4);
 } fhss_link_config_t;
 
 typedef struct {
     uint32_t tx_packets;
     uint32_t rx_packets;
     uint32_t rx_crc_errors;
+    uint32_t rx_header_errors; /* of rx_crc_errors: LoRa header bad, no payload */
     uint32_t rx_foreign; /* wrong net_id or malformed */
     uint32_t tx_dropped; /* queue full */
     uint32_t tx_errors;
@@ -86,6 +90,7 @@ typedef struct {
     uint8_t q_head;
     uint8_t q_count;
     fhss_link_stats_t stats;
+    int8_t last_snr_q4;     /* SNR of the last good packet, quarter dB */
     sx1262_err_t radio_err; /* why init failed, if it did */
 } fhss_link_t;
 

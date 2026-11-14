@@ -86,6 +86,13 @@ void sx1262_start_rx(sx1262_t *r);
 /* Returns bytes copied (>0), 0 if nothing received, or a negative error. */
 int sx1262_read_packet(sx1262_t *r, uint8_t *buf, uint8_t max, int16_t *rssi_dbm);
 
+/* Like sx1262_read_packet, but also hands back packets that failed the
+ * payload CRC (*crc_ok = false) and reports SNR in quarter dB, so a test
+ * can count bit errors. Returns the length, 0 if nothing arrived, or
+ * SX1262_ERR_CRC when the LoRa header itself was bad (no payload). */
+int sx1262_read_packet_ex(sx1262_t *r, uint8_t *buf, uint8_t max, int16_t *rssi_dbm,
+                          int8_t *snr_q4, bool *crc_ok);
+
 /* Time on air per Semtech formula (SF7..12), rounded up to whole ms. */
 uint32_t sx1262_airtime_ms(const sx1262_lora_cfg_t *cfg, uint8_t payload_len);
 

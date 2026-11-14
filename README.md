@@ -40,6 +40,10 @@ The board firmware uses **frame mode** (`src/telem_frame.c`):
 
 Without a layout (`schema = NULL`) the bridge still forwards each hub message as it is, split into radio payloads on sensor boundaries. The 60 s host test of this mode is kept.
 
+## Range testing
+
+`RANGE=1` firmware on both boards plus `tools/range/range_log.py` on the laptop measures packet error rate, bit error rate, RSSI, SNR and link margin in both directions at each distance; `tools/range/range_report.py` turns the logs into a report. Setup and method: [`tools/range/README.md`](tools/range/README.md).
+
 ## Porting to other hardware
 
 See `examples/port_template.c`. You provide two things:

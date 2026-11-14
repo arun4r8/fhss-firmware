@@ -152,6 +152,8 @@ make flash APP=bridge ROLE=pod DEMO=1
 - **Demo:** with only one setup, `DEMO=1` puts the MCP2515 in loopback and feeds it fake messages from hubs 1–4 in turn, each hub at 10 Hz (one message every 25 ms). The whole pod path runs. If the MCP2515 doesn't answer, the demo hands the frames straight to the bridge instead, so the radio can still be tested. The status line every 5 s should show hub messages climbing, about 5 frames sent per second (10 with `BW250=1`), and the rest counted as "merged before sending".
 - **Both boards must use the same `LINK_LEADER_SLOT_MS` and `TELEM_SCHEMA`.** A ground with a different layout version prints "not a telemetry frame for this layout".
 
+- **Range test:** `RANGE=1` builds (pod and ground) send a known pattern and log packet loss, bit errors, RSSI and SNR in both directions; see `tools/range/README.md`.
+
 Placeholders at the top of `bridge.c`, to confirm with the embedded team:
 
 | Setting | Placeholder | Question |
@@ -187,7 +189,7 @@ Hopping as leader (0 dBm, beacon every dwell). One line per 20 s cycle:
   ...
 ```
 
-Measured send time is 2–3 ms longer than the calculated airtime. That's SPI and polling overhead at the 4 MHz system clock, within the link's 5 ms retune margin.
+Measured send time is 2–3 ms longer than the calculated airtime: SPI and polling overhead. That run was at the reset 4 MHz clock; since 11-14 `board_init()` runs the MCU at 48 MHz (MSI range 11, 2 flash wait states, SPI 3 MHz).
 
 **Since then (bench logs in `logs/`):** the two-board link, and the old per-hub bridge end to end through CAN loopback, both work on hardware. On 11-08 the 38-sensor frame ran on both boards in both directions: 125 kHz / 330/70 gave 5.00 frames/s (2 on every hop) and 190/190 commands up; 250 kHz / 340/60 gave 9.91 frames/s and 190/190 commands. 0 frames missed in both.
 

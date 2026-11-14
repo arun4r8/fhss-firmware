@@ -49,6 +49,7 @@
 #include "can_bridge.h"
 #include "fhss_link.h"
 #include "mcp2515.h"
+#include "range_test.h"
 #include "telem_frame.h"
 
 #define ROLE_POD    1
@@ -93,7 +94,12 @@
 
 #define FHSS_SEED       0x6A5D10u /* same on both boards */
 #define FHSS_NET_ID     0x47
-#define TX_DBM          0         /* bench power; raise for range tests */
+#ifndef BRIDGE_RANGE
+#define BRIDGE_RANGE 0
+#endif
+#ifndef TX_DBM
+#define TX_DBM (BRIDGE_RANGE ? 14 : 0) /* bench power 0 dBm; range tests 14 (TXDBM=..) */
+#endif
 #define STATUS_EVERY_MS 5000u
 #define DEMO_EVERY_MS   25u       /* fake hub messages: hubs 1-4 in turn, each at 10 Hz */
 #define HUB_EVERY_MS    100u      /* HUB mode: hub 4 on the real bus at 10 Hz */
@@ -113,6 +119,11 @@ static uint32_t can_tx_errors;
 static uint32_t hub_msgs_sent;
 static uint32_t cmds_sent, cmds_ok, cmds_bad, cmds_missed;
 static uint16_t cmd_seq;
+
+/* RANGE: pod side (what it heard from the ground) and ground side counts */
+static uint16_t range_seq;
+static int8_t up_rssi_last, up_snr_last;
+static uint32_t rng_ok, rng_bad, rng_bit_errors, rng_bits;
 
 /* Ground: queue the next dummy command (fills this node's slot). */
 static void send_test_cmd(void)
@@ -140,7 +151,6 @@ static void send_test_cmd(void)
 static void pod_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi_dbm)
 {
     (void)user;
-    (void)rssi_dbm;
     static int32_t last = -1;
     if (len == 0) {
         return;
@@ -159,6 +169,8 @@ static void pod_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi
     }
     last = seq;
     cmds_ok++;
+    up_rssi_last = (int8_t)(rssi_dbm < -128 ? -128 : rssi_dbm);
+    up_snr_last = link.last_snr_q4;
 }
 
 static bool radio_idle(void *user)
@@ -209,8 +221,70 @@ static void print_frame(const uint16_t *v, int16_t rssi)
 }
 
 /* Ground: every payload from the pod. */
+/* RANGE, ground: one line per packet for tools/range:
+ * PKT,ms,hop,ch,crc_ok,rssi,snr_q4,bit_errors,bits,seq,up_ok,up_rssi,up_snr_q4,cmds_sent
+ * (seq and the up_* fields are -1 when the CRC failed: they can't be trusted) */
+static void range_report(bool ok, const uint8_t *payload, uint8_t len, int16_t rssi, int8_t snr_q4)
+{
+    uint32_t bits = 0;
+    uint32_t errs = range_bit_errors(payload, len, link.fhss.hop_index, &bits);
+    range_info_t info;
+    bool have = ok && range_parse(payload, len, &info);
+    if (ok && !have) {
+        return; /* not a range-test payload */
+    }
+    if (ok) {
+        rng_ok++;
+    } else {
+        rng_bad++;
+    }
+    rng_bit_errors += errs;
+    rng_bits += bits;
+    uart_puts("PKT,");
+    uart_put_int((int32_t)HAL_GetTick());
+    uart_puts(",");
+    uart_put_int(link.fhss.hop_index);
+    uart_puts(",");
+    uart_put_int(fhss_current_channel(&link.fhss));
+    uart_puts(ok ? ",1," : ",0,");
+    uart_put_int(rssi);
+    uart_puts(",");
+    uart_put_int(snr_q4);
+    uart_puts(",");
+    uart_put_int((int32_t)errs);
+    uart_puts(",");
+    uart_put_int((int32_t)bits);
+    uart_puts(",");
+    uart_put_int(have ? info.seq : -1);
+    uart_puts(",");
+    uart_put_int(have ? info.up_ok : -1);
+    uart_puts(",");
+    uart_put_int(have ? info.up_rssi_dbm : -1);
+    uart_puts(",");
+    uart_put_int(have ? info.up_snr_q4 : -1);
+    uart_puts(",");
+    uart_put_int((int32_t)cmds_sent);
+    uart_puts("\n");
+}
+
+static void ground_rx_bad(void *user, const uint8_t *pkt, uint8_t len, int16_t rssi_dbm, int8_t snr_q4)
+{
+    (void)user;
+    if (BRIDGE_RANGE && fhss_link_locked(&link)) {
+        uint8_t n = len > FHSS_LINK_HEADER_LEN ? (uint8_t)(len - FHSS_LINK_HEADER_LEN) : 0;
+        range_report(false, pkt + FHSS_LINK_HEADER_LEN, n, rssi_dbm, snr_q4);
+    }
+}
+
 static void on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi_dbm)
 {
+    if (BRIDGE_RANGE) {
+        (void)user;
+        if (len) {
+            range_report(true, data, len, rssi_dbm, link.last_snr_q4);
+        }
+        return;
+    }
     (void)user;
     if (len == 0) {
         return; /* beacon with no telemetry */
@@ -335,6 +409,20 @@ static void print_status(void)
         uart_put_int((int32_t)cmds_bad);
     } else {
         uart_puts(fhss_link_locked(&link) ? "status: locked" : "status: searching for the pod");
+        if (BRIDGE_RANGE) {
+            uart_puts(", test packets ok ");
+            uart_put_int((int32_t)rng_ok);
+            uart_puts(", crc fail ");
+            uart_put_int((int32_t)rng_bad);
+            uart_puts(", bit errors ");
+            uart_put_int((int32_t)rng_bit_errors);
+            uart_puts(" of ");
+            uart_put_int((int32_t)rng_bits);
+            uart_puts(", cmds sent ");
+            uart_put_int((int32_t)cmds_sent);
+            uart_puts("\n");
+            return;
+        }
         uart_puts(", frames ");
         uart_put_int((int32_t)b->radio_in);
         uart_puts(", missed ");
@@ -387,6 +475,11 @@ static void on_tx_log(void *user, uint8_t len, uint32_t start_ms)
 static uint8_t pod_fill(void *user, uint8_t *buf, uint8_t max)
 {
     (void)user;
+    if (BRIDGE_RANGE) {
+        range_info_t info = {.seq = range_seq++, .up_ok = (uint16_t)cmds_ok,
+                             .up_rssi_dbm = up_rssi_last, .up_snr_q4 = up_snr_last};
+        return (uint8_t)range_build(&info, link.fhss.hop_index, buf, max);
+    }
     drain_can(NULL);
     return can_bridge_fill(&bridge, buf, max);
 }
@@ -396,15 +489,17 @@ int main(void)
     board_init();
     HAL_Delay(200); /* let the host's serial monitor attach */
 
-    uart_puts(BRIDGE_ROLE == ROLE_POD
+    uart_puts(BRIDGE_RANGE ? (BRIDGE_ROLE == ROLE_POD ? "\n=== RANGE TEST: pod (battery, sends the test pattern) ===\n"
+                                                    : "\n=== RANGE TEST: ground (logs every packet) ===\n")
+              : BRIDGE_ROLE == ROLE_POD
                   ? (BRIDGE_DEMO ? "\n=== CAN bridge: pod, DEMO (MCP2515 loopback, fake hubs 1-4) ===\n"
                                  : "\n=== CAN bridge: pod (CAN -> radio, hopping leader) ===\n")
                   : (BRIDGE_HUB ? "\n=== CAN bridge: ground + fake hub 4 on the CAN bus ===\n"
                                 : "\n=== CAN bridge: ground (radio -> console + CAN) ===\n"));
 
-    int err = mcp2515_init(&can);
-    can_ok = err == MCP2515_OK;
-    if (!can_ok) {
+    int err = BRIDGE_RANGE ? MCP2515_OK : mcp2515_init(&can);
+    can_ok = !BRIDGE_RANGE && err == MCP2515_OK;
+    if (!can_ok && !BRIDGE_RANGE) {
         uart_puts("CAN controller init failed, error ");
         uart_put_int(err);
         uart_puts(BRIDGE_ROLE != ROLE_POD ? " (continuing: console output only)\n"
@@ -438,6 +533,7 @@ int main(void)
         .leader_slot_ms = LINK_LEADER_SLOT_MS,
         .bandwidth_hz = LINK_BANDWIDTH_HZ,
         .on_rx = BRIDGE_ROLE == ROLE_GROUND ? on_rx : pod_on_rx,
+        .on_rx_bad = BRIDGE_ROLE == ROLE_GROUND ? ground_rx_bad : NULL,
         .tx_wait_hook = BRIDGE_ROLE == ROLE_POD ? drain_can : NULL,
         .fill = BRIDGE_ROLE == ROLE_POD ? pod_fill : NULL,
         .on_tx = on_tx_log,
@@ -454,6 +550,20 @@ int main(void)
 
     if (HOP_LOG) {
         log_config();
+        if (BRIDGE_RANGE) {
+            /* RCFG,role,bandwidth_hz,leader_slot_ms,tx_dbm,payload_bytes,sf */
+            uart_puts(BRIDGE_ROLE == ROLE_POD ? "RCFG,pod," : "RCFG,ground,");
+            uart_put_int((int32_t)link.radio.cfg.bandwidth_hz);
+            uart_puts(",");
+            uart_put_int(link.leader_slot_ms);
+            uart_puts(",");
+            uart_put_int(TX_DBM);
+            uart_puts(",");
+            uart_put_int(RANGE_PAYLOAD_LEN);
+            uart_puts(",");
+            uart_put_int(link.radio.cfg.spreading_factor);
+            uart_puts("\n");
+        }
         log_fields("HOP", HAL_GetTick());
         uart_puts(fhss_link_locked(&link) ? ",H\n" : ",S\n");
     }
@@ -462,6 +572,7 @@ int main(void)
     uint32_t last_rx = 0;
     bool was_locked = fhss_link_locked(&link);
     uint32_t next_status = HAL_GetTick() + STATUS_EVERY_MS;
+    uint32_t next_stat = HAL_GetTick() + 1000u;
     uint32_t next_demo = HAL_GetTick() + DEMO_EVERY_MS;
     for (;;) {
         if (BRIDGE_ROLE == ROLE_POD) {
@@ -503,6 +614,27 @@ int main(void)
         if ((int32_t)(HAL_GetTick() - next_status) >= 0) {
             next_status += STATUS_EVERY_MS;
             print_status();
+        }
+        if (BRIDGE_RANGE && BRIDGE_ROLE == ROLE_GROUND && (int32_t)(HAL_GetTick() - next_stat) >= 0) {
+            /* STAT,ms,locked,crc_errors,header_errors,cmds_sent,rx_ok,rx_bad,bit_errors,bits */
+            next_stat += 1000u;
+            uart_puts("STAT,");
+            uart_put_int((int32_t)HAL_GetTick());
+            uart_puts(fhss_link_locked(&link) ? ",1," : ",0,");
+            uart_put_int((int32_t)link.stats.rx_crc_errors);
+            uart_puts(",");
+            uart_put_int((int32_t)link.stats.rx_header_errors);
+            uart_puts(",");
+            uart_put_int((int32_t)cmds_sent);
+            uart_puts(",");
+            uart_put_int((int32_t)rng_ok);
+            uart_puts(",");
+            uart_put_int((int32_t)rng_bad);
+            uart_puts(",");
+            uart_put_int((int32_t)rng_bit_errors);
+            uart_puts(",");
+            uart_put_int((int32_t)rng_bits);
+            uart_puts("\n");
         }
     }
 }

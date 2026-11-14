@@ -7,6 +7,9 @@
 #   make bridge ROLE=pod DEMO=1  build build/bridge-demo.bin (one board, no CAN bus)
 #   make bridge ROLE=ground HUB=1  build build/bridge-ground-hub.bin (real CAN bus test:
 #                                the ground board plays a hub; pair with ROLE=pod)
+#   make bridge ROLE=pod|ground RANGE=1 [TXDBM=14] [BW250=1]
+#                                range test (see tools/range/README.md): the pod
+#                                sends a known pattern, the ground logs every packet
 #   add BW250=1 to any bridge build for LoRa 250 kHz + 340/60 split (both boards
 #                                must match; output name ends in -bw250)
 #   make flash [APP=bridge ROLE=... DEMO=1]
@@ -70,7 +73,16 @@ ifeq ($(BW250),1)
   BRIDGE_DEFS += -DBRIDGE_BW250=1
   BRIDGE_NAME := $(BRIDGE_NAME)-bw250
 endif
-BRIDGE_SRCS := bridge.c $(ROOT)/src/can_bridge.c $(ROOT)/src/telem_frame.c $(ROOT)/src/can_msg.c
+RANGE ?= 0
+ifeq ($(RANGE),1)
+  BRIDGE_DEFS += -DBRIDGE_RANGE=1
+  BRIDGE_NAME := bridge-range-$(ROLE)$(if $(filter 1,$(BW250)),-bw250)
+endif
+ifneq ($(TXDBM),)
+  BRIDGE_DEFS += -DTX_DBM=$(TXDBM)
+  BRIDGE_NAME := $(BRIDGE_NAME)-$(TXDBM)dbm
+endif
+BRIDGE_SRCS := bridge.c $(ROOT)/src/can_bridge.c $(ROOT)/src/telem_frame.c $(ROOT)/src/range_test.c $(ROOT)/src/can_msg.c
 
 APP ?= selftest
 FLASH_BIN := $(BUILD)/$(if $(filter bridge,$(APP)),$(BRIDGE_NAME),selftest).bin
@@ -89,6 +101,8 @@ bridges:
 	$(MAKE) bridge ROLE=ground HUB=1
 	$(MAKE) bridge ROLE=pod DEMO=1 BW250=1
 	$(MAKE) bridge ROLE=ground BW250=1
+	$(MAKE) bridge ROLE=pod RANGE=1
+	$(MAKE) bridge ROLE=ground RANGE=1
 
 $(BUILD)/selftest.elf: selftest.c $(DEPS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COMMON) selftest.c $(LDFLAGS) -Wl,-Map=$(BUILD)/selftest.map -lgcc -o $@
