@@ -7,9 +7,9 @@ void range_pattern(uint16_t hop_index, uint8_t *out, size_t n)
     for (size_t i = 0; i < n; i++) {
         uint8_t byte = 0;
         for (int b = 0; b < 8; b++) {
-            uint16_t bit = (uint16_t)(((lfsr >> 8) ^ (lfsr >> 4)) & 1u); /* taps 9 and 5 */
-            lfsr = (uint16_t)(((lfsr << 1) | bit) & 0x1FFu);
-            byte = (uint8_t)((byte << 1) | bit);
+            unsigned bit = (((unsigned)lfsr >> 8) ^ ((unsigned)lfsr >> 4)) & 1u; /* taps 9 and 5 */
+            lfsr = (uint16_t)((((unsigned)lfsr << 1) | bit) & 0x1FFu);
+            byte = (uint8_t)(((unsigned)byte << 1) | bit);
         }
         out[i] = byte;
     }

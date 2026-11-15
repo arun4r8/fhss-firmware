@@ -5,11 +5,17 @@
  * CAN controller and still start its next frame on time. Reset leaves the
  * core regulator in range 1, which allows 48 MHz; flash needs 2 wait states
  * at that speed. All bus prescalers stay at 1, so PCLK = 48 MHz. */
-#define CORE_HZ 48000000u
+#ifndef CORE_MHZ
+#define CORE_MHZ 48 /* 4 keeps the reset clock (make ... CLOCK_MHZ=4) */
+#endif
+#define CORE_HZ (CORE_MHZ * 1000000u)
 uint32_t SystemCoreClock = 4000000u;
 
 static void clock_48mhz(void)
 {
+    if (CORE_MHZ == 4) {
+        return;
+    }
     FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | 2u | FLASH_ACR_PRFTEN | FLASH_ACR_ICEN | FLASH_ACR_DCEN;
     while ((FLASH->ACR & FLASH_ACR_LATENCY) != 2u) {
     }
@@ -74,7 +80,8 @@ void board_init(void)
     pin_mode(GPIOA, 5, MODE_AF, 5);
     pin_mode(GPIOA, 6, MODE_AF, 5);
     pin_mode(GPIOA, 7, MODE_AF, 5);
-    SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR_1 | SPI_CR1_BR_0;
+    SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
+                (CORE_MHZ == 4 ? 0u : SPI_CR1_BR_1 | SPI_CR1_BR_0); /* 4 MHz: PCLK/2 = 2 MHz */
     SPI1->CR2 = (7u << 8) /* DS = 8-bit */ | SPI_CR2_FRXTH;
     SPI1->CR1 |= SPI_CR1_SPE;
 

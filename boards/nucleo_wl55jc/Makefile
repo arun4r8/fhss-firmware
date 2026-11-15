@@ -43,6 +43,9 @@ COMMON := startup.c board.c hal_shim.c libc_min.c \
 DEPS   := $(COMMON) $(wildcard *.h) $(wildcard libc/*.h) $(wildcard $(ROOT)/include/*.h) \
           $(wildcard $(ROOT)/ports/nucleo_sx1262/*.h) $(ROOT)/drivers/mcp2515/mcp2515.h stm32wl55jc_cm4.ld
 
+ifneq ($(CLOCK_MHZ),)
+  CFLAGS += -DCORE_MHZ=$(CLOCK_MHZ)
+endif
 ROLE ?= pod
 DEMO ?= 0
 HUB ?= 0
