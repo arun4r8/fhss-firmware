@@ -1,6 +1,6 @@
 ## Summary
 
-**First range test, 2026-11-14, parking lot.**
+**First range test, 2026-11-14, Zilker Park (Austin).**
 
 | | |
 |---|---|

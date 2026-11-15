@@ -4,7 +4,7 @@ Texas Guadaloop RF comms, FHSS link between the pod and ground boards. Generated
 
 ## Summary
 
-**First range test, 2026-11-14, parking lot.**
+**First range test, 2026-11-14, Zilker Park (Austin).**
 
 | | |
 |---|---|
@@ -52,7 +52,7 @@ Texas Guadaloop RF comms, FHSS link between the pod and ground boards. Generated
 
 ## Setup
 
-- `range_171518.log`: field test 2026-11-14, 14 dBm both boards, SF7/125 kHz, stock shield antennas vertical; heights/place: TBD
+- `range_171518.log`: field test 2026-11-14 at Zilker Park (Austin), 14 dBm both boards, SF7/125 kHz, stock shield antennas vertical, both boards ~1 m high
 
 | Parameter | Value |
 |---|---|
@@ -70,7 +70,7 @@ Pod → ground ("down") is the telemetry direction. Intervals in brackets are 95
 
 | Stop | Time | Locked (lost) | Down: sent / ok / CRC fail | Down PER | BER (received packets) | RSSI mean (min) | SNR mean (min) | Noise floor | Margin | Up: sent / ok | Up PER | Up RSSI / SNR |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0 m, parking lot, both boards ~1 m high | 73 s | 100 % (0×) | 365 / 365 / 0 | 0.0 % (0.0–1.0) | 0 errors in 207,320 bits (< 1.8e-05) | -35 (-79) dBm | 12.5 (10.8) dB | – dBm | 19.5 dB | 182 / 182 | 0.0 % (0.0–2.1) | -36 dBm / 12.4 dB |
+| 0 m, Zilker Park, both boards ~1 m high | 73 s | 100 % (0×) | 365 / 365 / 0 | 0.0 % (0.0–1.0) | 0 errors in 207,320 bits (< 1.8e-05) | -35 (-79) dBm | 12.5 (10.8) dB | – dBm | 19.5 dB | 182 / 182 | 0.0 % (0.0–2.1) | -36 dBm / 12.4 dB |
 | walking to 25 | 20 s | 100 % (0×) | 100 / 100 / 0 | 0.0 % (0.0–3.7) | 0 errors in 56,800 bits (< 6.5e-05) | -70 (-87) dBm | 12.2 (9.2) dB | – dBm | 19.2 dB | 49 / 49 | 0.0 % (0.0–7.3) | -72 dBm / 9.3 dB |
 | 25 | 12 s | 100 % (0×) | 59 / 59 / 0 | 0.0 % (0.0–6.1) | 0 errors in 33,512 bits (< 1.1e-04) | -69 (-83) dBm | 12.1 (7.0) dB | – dBm | 18.7 dB | 29 / 29 | 0.0 % (0.0–11.7) | -71 dBm / 9.0 dB |
 | 25 moving, continuous walk out | 28 s | 100 % (0×) | 141 / 139 / 1 | 1.4 % (0.4–5.0) | 0 errors in 79,520 bits (< 4.6e-05) | -72 (-88) dBm | 12.1 (9.5) dB | – dBm | 18.8 dB | 70 / 70 | 0.0 % (0.0–5.2) | -74 dBm / 9.3 dB |
