@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+body { margin: 0; background: #fff; font-family: Arial, Helvetica, sans-serif; color: #111; }
+#page { width: 1180px; padding: 26px 34px 30px; }
+h2 { font-size: 22px; font-weight: normal; margin: 0 0 14px; }
+h3 { font-size: 17px; font-weight: bold; margin: 26px 0 10px; }
+table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+td { border: 2px solid #222; text-align: center; padding: 0 6px; }
+.grp td { background: #3a3a3a; color: #fff; font-size: 16px; text-align: left; height: 44px; padding-left: 12px; }
+.size td { background: #e3e3e3; font-size: 15px; height: 44px; }
+.field td { font-size: 20px; height: 58px; line-height: 1.15; }
+.field td small { display: block; font-size: 13px; color: #444; margin-top: 3px; }
+.rh { background: #dfeedb; }
+.ec { background: #dcd6ec; }
+ul { margin: 12px 0 0; padding-left: 26px; font-size: 16px; line-height: 1.45; }
+li { margin: 3px 0; }
+.cap { width: 1000px; margin-top: 10px; }
+.cap td, .cap th { border: 1.5px solid #888; font-size: 15px; height: 32px; padding: 0 10px; }
+.cap th { background: #e3e3e3; font-weight: bold; }
+.new { color: #6a3fb0; font-weight: bold; }
+</style></head><body><div id="page">
+
+<h2>RF Packets (updated 11-15)</h2>
+
+<h3>Pod → ground: telemetry frame (one per packet, 2 every 400 ms hop)</h3>
+<table>
+  <colgroup><col style="width:11%"><col style="width:11%"><col style="width:15%"><col style="width:16%"><col style="width:16%"><col style="width:31%"></colgroup>
+  <tr class="grp"><td colspan="3">Radio Header (6 bytes)</td><td colspan="3">Embedded Control (78 bytes)</td></tr>
+  <tr class="size"><td>8 bits/1 byte</td><td>8 bits/1 byte</td><td>32 bits/4 bytes</td><td>8 bits/1 byte</td><td>8 bits/1 byte</td><td>608 bits/76 bytes</td></tr>
+  <tr class="field">
+    <td class="rh">Network</td><td class="rh">Flags</td><td class="rh">HOP Bits</td>
+    <td class="ec">Frame Header<small>4 bits layout version + 4 bits frame counter</small></td>
+    <td class="ec">Pod State <span class="new">(new)</span><small>4 bits state + 4 bits spare</small></td>
+    <td class="ec">Readings<small>38 sensors × 16 bits, fixed order, no tags</small></td>
+  </tr>
+</table>
+<ul>
+  <li>84 bytes on air = 149 ms (SF7 / 125 kHz). The state byte added no airtime.</li>
+  <li>All 38 sensors in every packet: no CAN message header or per-sensor tags needed, because both ends share the sensor order. A reading of 0xFFFF = sensor fault / no data yet.</li>
+  <li>Layout version (now 2) changes whenever the sensor list or order changes, so an out-of-date ground rejects frames instead of mislabelling them.</li>
+</ul>
+
+<h3>Ground → pod: command (one per hop)</h3>
+<table style="width:72%">
+  <colgroup><col style="width:15%"><col style="width:15%"><col style="width:21%"><col style="width:16%"><col style="width:16%"><col style="width:17%"></colgroup>
+  <tr class="grp"><td colspan="3">Radio Header (6 bytes)</td><td colspan="3">Embedded Control (4 bytes)</td></tr>
+  <tr class="size"><td>8 bits/1 byte</td><td>8 bits/1 byte</td><td>32 bits/4 bytes</td><td>8 bits/1 byte</td><td>8 bits/1 byte</td><td>16 bits/2 bytes</td></tr>
+  <tr class="field">
+    <td class="rh">Network</td><td class="rh">Flags</td><td class="rh">HOP Bits</td>
+    <td class="ec">Command ID<small>0xC5</small></td>
+    <td class="ec">Target State <span class="new">(new)</span><small>4 bits state + 4 bits spare</small></td>
+    <td class="ec">Counter<small>for counting misses</small></td>
+  </tr>
+</table>
+<ul>
+  <li>10 bytes on air = 42 ms, sent every hop; a lost command is repeated on the next hop.</li>
+  <li>The pod forwards the target state to the VCU on CAN and reports the state in its next frame. On hardware the ground saw a new state confirmed in 0.3–0.5 s.</li>
+</ul>
+
+<h3>Capacity if the sensor count grows</h3>
+<table class="cap">
+  <tr><th>Sensors</th><th>Packet on air</th><th>125 kHz (now)</th><th>250 kHz option</th></tr>
+  <tr><td>38 (current)</td><td>84 bytes</td><td>149 ms, 2 per hop = <b>5 full sets/s</b></td><td>75 ms, 4 per hop = 10 sets/s</td></tr>
+  <tr><td>45</td><td>98 bytes</td><td>170 ms, 1 per hop = 2.5 sets/s</td><td>85 ms, 3 per hop = 7.5 sets/s</td></tr>
+  <tr><td>60</td><td>128 bytes</td><td>216 ms, 1 per hop = 2.5 sets/s</td><td>108 ms, 3 per hop = 7.5 sets/s</td></tr>
+</table>
+<ul>
+  <li><b>Agreed with embedded (11-15):</b> a fixed number of sensors per packet, in an order both ends share; embedded will send the sensor order.</li>
+  <li><b>Still open:</b> the sensor order, what the 16 states mean, how the VCU reports its actual state, CAN IDs, and the final sensor count (power/BMS not counted yet).</li>
+</ul>
+</div></body></html>
