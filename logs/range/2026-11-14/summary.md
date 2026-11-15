@@ -42,8 +42,11 @@ The ground board was powered from the laptop's USB port during the test (team no
 | **Laptop USB power and the laptop itself** | Ground | Ground radio was powered from, and sitting next to, the laptop: a common source of broadband noise | Power the ground board from a battery or a USB isolator, antenna on a cable 2 m from the laptop; repeat the noise scan |
 | Power bank switching noise | Pod | Pod-side noise was the worst | Pod on a different battery, or a linear supply |
 | MCU clock | Both | It went from 4 to 48 MHz just before this test. 19 × 48 MHz = 912 MHz, inside the band, and the worst channel was 912.7 MHz. The self-test noise scan on the bench was −102 dBm average at 48 MHz (11-14) against −111 dBm at 4 MHz (10-04). | Noise scan (self-test) at 4 and 48 MHz in the same place |
+| Phones not in airplane mode (RF lead, 11-15) | Both | Phones carried next to both radios can desensitize the receivers; the pod was carried by a person | Repeat with every phone in airplane mode |
+| Nearby cell-tower blockers (RF lead, 11-15) | Both | Strong out-of-band signals raise the receiver's effective noise | SDR sweep around the band at the site |
+| Stock antennas with poor matching (RF lead, 11-15) | Both | Mismatch loses signal at both ends | VNA S11 on the stock antennas, or swap in matched antennas |
 | Ambient 915 MHz traffic | Both | Smart meters, RFID, LoRaWAN | Brennen's SDR sweep of 902–928 MHz at the test site |
 
 **Next tests**
-- Repeat after the noise checks above.
+- Retest under controlled conditions: ground on battery, phones in airplane mode, matched antennas.
 - Then try 22 dBm, raise both antennas to about 2 m, and record the distance at every stop (a phone GPS pin works).
