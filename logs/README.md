@@ -76,7 +76,7 @@ Hardware: two NUCLEO-WL55JC2 boards with SX1262 shields, plus HW-184 MCP2515 mod
 | 11-08 | Real CAN bus between the boards (`HUB=1`) | **Still failing**: ground's frames never ACKed (EFLG 0x15), pod sees 0 frames. Controllers pass loopback, so it's the transceiver side or bus wiring | same |
 | 11-14 | **MCU at 48 MHz** (was 4 MHz), self-test on the pod board | Radio, PLL, device errors pass; 30 B TX in 73 ms (was 74–75, 72 calculated). CAN check failed at 6 and 3 MHz SPI: CAN module likely not connected at the time (unconfirmed). SPI left at 3 MHz | `range/2026-11-14-bench/` |
 | 11-14 | **Range-test firmware + logger + report, bench check** (boards ~30 cm apart, 14 dBm) | 2 stops, 70 s: 351/351 test packets down (5.0/s, 2 every hop), 0 bit errors in 199,368 bits, 175/175 commands up, −15 dBm, SNR +12.6 dB. Logger and report work end to end | `range/2026-11-14-bench/report.md` |
-| 11-15 | **Pod state loop** (4-bit state each way: ground command → pod → state reported in every frame) | `s3`, `sA`, `s0` all confirmed in the pod's frames within 772–845 ms; 5 frames/s, 149 commands received, 1 missed | `hardware/2026-11-15.md` |
+| 11-15 | **Pod state loop** (4-bit state each way: ground command → pod → state reported in every frame) | `s3`, `sA`, `s0` all confirmed in the pod's frames within 772–845 ms; 5 frames/s, 149 commands received, 1 missed. With a new target replacing the queued command: 6/6 confirmed in **313–458 ms** | `hardware/2026-11-15.md` |
 
 Notes for reading the captures:
 

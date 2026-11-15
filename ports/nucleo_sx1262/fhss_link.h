@@ -109,6 +109,11 @@ void fhss_link_poll(fhss_link_t *l);
  * the queue is full or it is longer than max_send_len. */
 bool fhss_link_send(fhss_link_t *l, const uint8_t *data, uint8_t len);
 
+/* Overwrite the newest queued payload (not yet sent) with a new one, e.g. a
+ * command that has been superseded. false if the queue is empty or len is
+ * longer than max_send_len. */
+bool fhss_link_replace_last(fhss_link_t *l, const uint8_t *data, uint8_t len);
+
 bool fhss_link_locked(const fhss_link_t *l);
 
 /* true if a payload of len bytes could start right now in this node's slot.

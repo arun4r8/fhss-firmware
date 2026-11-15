@@ -121,6 +121,17 @@ bool fhss_link_send(fhss_link_t *l, const uint8_t *data, uint8_t len)
     return true;
 }
 
+bool fhss_link_replace_last(fhss_link_t *l, const uint8_t *data, uint8_t len)
+{
+    if (l->q_count == 0 || len > l->max_send_len) {
+        return false;
+    }
+    uint8_t last = (uint8_t)((l->q_head + l->q_count - 1) % FHSS_LINK_QUEUE_LEN);
+    l->queue[last].len = len;
+    memcpy(l->queue[last].data, data, len);
+    return true;
+}
+
 bool fhss_link_locked(const fhss_link_t *l)
 {
     return fhss_state(&l->fhss) == FHSS_STATE_HOPPING;

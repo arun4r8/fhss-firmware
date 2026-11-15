@@ -506,6 +506,45 @@ static void test_link_max_payload(void)
     CHECK(fhss_link_init(&l, &c) == FHSS_LINK_ERR_CONFIG, "500 kHz accepted on 500 kHz channels");
 }
 
+static void test_replace_last(void)
+{
+    printf("a queued payload can be replaced before it goes out\n");
+    emu_reset_world();
+    static sx1262_emu_t ea, eb;
+    static fhss_link_t lead, fol;
+    static rx_sink_t lead_rx, fol_rx;
+    memset(&lead_rx, 0, sizeof(lead_rx));
+    memset(&fol_rx, 0, sizeof(fol_rx));
+    emu_add_radio(&ea, 0);
+    emu_add_radio(&eb, 1);
+    set_peers(&lead, &fol, NULL);
+    fhss_link_config_t lc = link_cfg(&ea, true, &lead_rx), fc = link_cfg(&eb, false, &fol_rx);
+    fhss_link_init(&lead, &lc);
+    fhss_link_init(&fol, &fc);
+    CHECK(!fhss_link_replace_last(&fol, (const uint8_t *)"new", 3), "replaced in an empty queue");
+    while (emu_now_ms < 30000 && !fhss_link_locked(&fol)) {
+        fhss_link_poll(&lead);
+        fhss_link_poll(&fol);
+        emu_now_ms++;
+    }
+    /* queue in the leader's slot so it can't go out yet, then replace it */
+    while (fhss_ms_until_hop(&fol.fhss, emu_now_ms) < 300) {
+        fhss_link_poll(&lead);
+        fhss_link_poll(&fol);
+        emu_now_ms++;
+    }
+    CHECK(fhss_link_send(&fol, (const uint8_t *)"old", 3), "queue");
+    CHECK(fhss_link_replace_last(&fol, (const uint8_t *)"newer", 5), "replace");
+    CHECK(fol.q_count == 1, "queue holds %u payloads, want 1", fol.q_count);
+    for (int i = 0; i < 800; i++) {
+        fhss_link_poll(&lead);
+        fhss_link_poll(&fol);
+        emu_now_ms++;
+    }
+    CHECK(lead_rx.received == 1 && strcmp(lead_rx.last, "newer") == 0, "leader got %d, last \"%s\"",
+          lead_rx.received, lead_rx.last);
+}
+
 static void test_foreign_network_ignored(void)
 {
     printf("packets with another net_id are ignored\n");
@@ -885,6 +924,7 @@ int main(void)
     test_bringup_checks();
     test_link_end_to_end();
     test_link_max_payload();
+    test_replace_last();
     test_foreign_network_ignored();
     test_can_bridge_over_link();
     test_frames_over_link();

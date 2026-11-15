@@ -142,6 +142,17 @@ static void send_state_cmd(void)
     }
 }
 
+/* Ground: a new target replaces the command already waiting for the slot
+ * (keeping its counter), so it goes out on this hop instead of the next. */
+static void retarget_state_cmd(void)
+{
+    uint8_t c[POD_CMD_LEN];
+    pod_cmd_build(target_state, (uint16_t)(cmd_seq - 1u), c, sizeof(c));
+    if (!fhss_link_replace_last(&link, c, sizeof(c)) && fhss_link_locked(&link)) {
+        send_state_cmd();
+    }
+}
+
 /* Pod: commands from the ground. The commanded state goes to the VCU on
  * CAN (ID VCU_STATE_CMD_ID, 1 byte); until embedded defines how the VCU
  * reports the state it is actually in, the pod reports the commanded one. */
@@ -612,6 +623,7 @@ int main(void)
                     target_state = (uint8_t)v;
                     target_set_ms = HAL_GetTick();
                     state_confirmed = false;
+                    retarget_state_cmd();
                     uart_puts("target state ");
                     uart_put_int(target_state);
                     uart_puts("\n");
