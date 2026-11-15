@@ -374,6 +374,10 @@ sx1262_err_t sx1262_send(sx1262_t *r, const uint8_t *data, uint8_t len)
     uint32_t start = HAL_GetTick();
     uint32_t timeout = sx1262_airtime_ms(&r->cfg, len) + TX_TIMEOUT_MARGIN_MS;
     sx1262_err_t err = SX1262_OK;
+    /* Check for TX done about once per ms, not back to back: continuous SPI
+     * traffic to the radio while it transmits corrupted ~10 % of packets on
+     * hardware (11-15, found when the pod's CAN polling stopped pacing this
+     * loop). Costs at most ~2 ms of TX-done latency. */
     while (!(get_irq(r) & IRQ_TX_DONE)) {
         if (HAL_GetTick() - start > timeout) {
             err = SX1262_ERR_TIMEOUT;
@@ -382,6 +386,7 @@ sx1262_err_t sx1262_send(sx1262_t *r, const uint8_t *data, uint8_t len)
         if (r->tx_wait_hook) {
             r->tx_wait_hook(r->tx_wait_ctx);
         }
+        HAL_Delay(1);
     }
     clear_irq(r, IRQ_ALL);
     sx1262_start_rx(r);
