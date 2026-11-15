@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "can_ring.h"
 #include "mcp2515.h"
 #include "mcp2515_emu.h"
 
@@ -140,12 +141,120 @@ static void test_bus(void)
     CHECK(ea.violations == 0 && eb.violations == 0, "SPI violations %d %d", ea.violations, eb.violations);
 }
 
+/* What the board's INT handler does: empty the chip into the ring while INT is low. */
+static void isr(mcp2515_t *c, mcp2515_emu_t *e, can_ring_t *r)
+{
+    can_frame_t f;
+    while (mcp2515_emu_int_low(e) && mcp2515_receive(c, &f)) {
+        can_ring_frame_t x = {.id = f.id, .dlc = f.dlc, .ms = emu_now_ms};
+        memcpy(x.data, f.data, f.dlc);
+        can_ring_push(r, &x);
+    }
+}
+
+/* Send n frames from a to b; b's main loop only gets to run every `stall`
+ * frames. irq: b's INT handler runs as each frame lands (interrupt mode);
+ * otherwise b is polled only when its main loop runs. Returns frames the
+ * main loop received in order (ids 0..n-1), or -1 on a gap or reorder. */
+static int burst(mcp2515_t *a, mcp2515_t *b, mcp2515_emu_t *eb, can_ring_t *r, bool irq,
+                 int n, int stall)
+{
+    int got = 0;
+    can_frame_t f;
+    can_ring_frame_t x;
+    for (int i = 0; i < n; i++) {
+        can_frame_t t = {.id = (uint16_t)i, .dlc = 2, .data = {(uint8_t)i, 0x5A}};
+        mcp2515_send(a, &t);
+        if (irq) {
+            isr(b, eb, r);
+        }
+        if ((i + 1) % stall == 0 || i == n - 1) { /* main loop runs */
+            if (irq) {
+                while (can_ring_pop(r, &x)) {
+                    if (x.id != got || x.data[0] != (uint8_t)got) return -1;
+                    got++;
+                }
+            } else {
+                while (mcp2515_receive(b, &f)) {
+                    got++;
+                }
+            }
+        }
+    }
+    return got;
+}
+
+static void test_irq(void)
+{
+    printf("rx interrupt: INT pin, ring buffer rides out main-loop stalls\n");
+    static mcp2515_emu_t ea, eb;
+    static can_ring_t ring;
+    can_emu_reset_world();
+    can_emu_add(&ea);
+    can_emu_add(&eb);
+    mcp2515_t a = ctl(&ea, MCP2515_MODE_NORMAL), b = ctl(&eb, MCP2515_MODE_NORMAL);
+    mcp2515_init(&a);
+    mcp2515_init(&b);
+    CHECK(eb.regs[0x2B] == 0x00, "polled build enabled interrupts: CANINTE %02X", eb.regs[0x2B]);
+
+    b.rx_irq = true;
+    mcp2515_init(&b);
+    CHECK(eb.regs[0x2B] == 0x03, "rx_irq: CANINTE %02X, want RX0IE|RX1IE", eb.regs[0x2B]);
+    CHECK(!mcp2515_emu_int_low(&eb), "INT low with nothing received");
+    can_frame_t t = {.id = 0x101, .dlc = 1, .data = {7}}, f;
+    mcp2515_send(&a, &t);
+    CHECK(mcp2515_emu_int_low(&eb), "INT not asserted for a received frame");
+    mcp2515_send(&a, &t);
+    CHECK(mcp2515_receive(&b, &f) && mcp2515_emu_int_low(&eb), "INT released with a frame still waiting");
+    CHECK(mcp2515_receive(&b, &f) && !mcp2515_emu_int_low(&eb), "INT stuck low after both buffers read");
+    mcp2515_send(&b, &t); /* our own transmit must not raise INT (TX interrupts stay off) */
+    CHECK(!mcp2515_emu_int_low(&eb), "INT asserted by a transmit");
+
+    /* 200 frames while the main loop only gets a turn every 40 frames
+     * (e.g. ~250 ms at 160 frames/s): polled loses nearly all of them, the
+     * interrupt + ring loses none */
+    b.rx_irq = false;
+    mcp2515_init(&b);
+    int polled = burst(&a, &b, &eb, &ring, false, 200, 40);
+    CHECK(polled == 10 && (eb.regs[0x2D] & 0xC0), "polled: %d of 200 kept (2 per turn expected), EFLG %02X",
+          polled, eb.regs[0x2D]);
+
+    b.rx_irq = true;
+    mcp2515_init(&b);
+    can_ring_init(&ring);
+    int got = burst(&a, &b, &eb, &ring, true, 200, 40);
+    CHECK(got == 200, "interrupt: %d of 200 received in order", got);
+    CHECK(ring.dropped == 0 && ring.max_depth == 40, "dropped %u, max depth %u", (unsigned)ring.dropped,
+          (unsigned)ring.max_depth);
+    CHECK(!(eb.regs[0x2D] & 0xC0), "chip overflowed in interrupt mode: EFLG %02X", eb.regs[0x2D]);
+
+    /* a stall longer than the ring: the excess is dropped and counted, the
+     * rest still arrive in order */
+    can_ring_init(&ring);
+    can_ring_frame_t x;
+    int kept = 0;
+    for (int i = 0; i < 100; i++) {
+        can_frame_t u = {.id = (uint16_t)i, .dlc = 1, .data = {(uint8_t)i}};
+        mcp2515_send(&a, &u);
+        isr(&b, &eb, &ring);
+    }
+    bool in_order = true;
+    while (can_ring_pop(&ring, &x)) {
+        in_order = in_order && x.id == kept;
+        kept++;
+    }
+    CHECK(kept == (int)CAN_RING_SIZE && ring.dropped == 100u - CAN_RING_SIZE && in_order,
+          "overfull ring: kept %d, dropped %u", kept, (unsigned)ring.dropped);
+    CHECK(ea.violations == 0 && eb.violations == 0, "SPI violations %d %d", ea.violations, eb.violations);
+}
+
 int main(void)
 {
     test_bit_timing();
     test_init();
     test_loopback();
     test_bus();
+    test_irq();
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

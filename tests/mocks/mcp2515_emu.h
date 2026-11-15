@@ -34,4 +34,7 @@ extern uint32_t emu_now_ms;
 void can_emu_reset_world(void);
 void can_emu_add(mcp2515_emu_t *e);
 
+/* The INT pin: low while any enabled interrupt flag is set (CANINTE & CANINTF). */
+bool mcp2515_emu_int_low(const mcp2515_emu_t *e);
+
 #endif

@@ -1,6 +1,8 @@
 /*
  * startup.c - Cortex-M4 (CPU1) vector table and reset for the STM32WL55.
- * Only core exceptions are listed: the firmware polls every peripheral.
+ * Core exceptions plus peripheral IRQs up to EXTI15_10 (IRQ 41), the only
+ * peripheral interrupt used (MCP2515 INT, CAN_IRQ=1 builds); the rest of
+ * the firmware polls.
  */
 #include <stdint.h>
 
@@ -24,9 +26,12 @@ void SVC_Handler(void) __attribute__((weak, alias("Default_Handler")));
 void DebugMon_Handler(void) __attribute__((weak, alias("Default_Handler")));
 void PendSV_Handler(void) __attribute__((weak, alias("Default_Handler")));
 void SysTick_Handler(void) __attribute__((weak, alias("Default_Handler")));
+void EXTI15_10_IRQHandler(void) __attribute__((weak, alias("Default_Handler")));
+
+#define EXTI15_10_IRQ 41
 
 __attribute__((section(".isr_vector"), used))
-void (*const vector_table[16])(void) = {
+void (*const vector_table[16 + EXTI15_10_IRQ + 1])(void) = {
     (void (*)(void))(&_estack),
     Reset_Handler,
     NMI_Handler,
@@ -40,6 +45,19 @@ void (*const vector_table[16])(void) = {
     0,
     PendSV_Handler,
     SysTick_Handler,
+    /* IRQ 0-40: never enabled */
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler,
+    EXTI15_10_IRQHandler, /* IRQ 41 */
 };
 
 void Reset_Handler(void)

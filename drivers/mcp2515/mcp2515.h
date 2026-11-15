@@ -1,8 +1,9 @@
 /*
  * mcp2515.h - Minimal MCP2515 CAN controller driver for STM32 HAL.
  *
- * Standard 11-bit IDs only (the embedded team's CAN plan). Polled: the INT
- * pin does not need wiring. On the team's bench setup the MCP2515 sits on a
+ * Standard 11-bit IDs only (the embedded team's CAN plan). Polled by
+ * default, so the INT pin does not need wiring; set rx_irq to have INT go
+ * low while a received frame is waiting (for interrupt-driven receive). On the team's bench setup the MCP2515 sits on a
  * HW-184 board with its TJA1050 removed; an Adafruit TJA1051T/3 breakout is
  * the transceiver (3.3 V logic, makes its own 5 V for the bus).
  */
@@ -49,6 +50,7 @@ typedef struct {
     mcp2515_mode_t mode;
     uint16_t filter_mask;  /* 0 = accept every ID */
     uint16_t filter_id;    /* accept IDs where (id & mask) == (filter_id & mask) */
+    bool rx_irq;           /* INT pin low while a received frame is waiting */
 } mcp2515_t;
 
 mcp2515_err_t mcp2515_init(mcp2515_t *c);
@@ -56,7 +58,9 @@ mcp2515_err_t mcp2515_init(mcp2515_t *c);
 /* Transmit one frame and wait for it to finish (a few hundred us at 500k). */
 mcp2515_err_t mcp2515_send(mcp2515_t *c, const can_frame_t *f);
 
-/* true if a frame was waiting; fills *f. */
+/* true if a frame was waiting; fills *f. Reading a frame frees its buffer
+ * (and releases INT once both buffers are empty). Not reentrant: with rx_irq,
+ * call it only from the interrupt handler. */
 bool mcp2515_receive(mcp2515_t *c, can_frame_t *f);
 
 /* EFLG register plus transmit/receive error counters. */

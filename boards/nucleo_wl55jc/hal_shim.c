@@ -24,7 +24,13 @@ void HAL_Delay(uint32_t ms)
 
 void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint16_t pin, GPIO_PinState state)
 {
+    if (state == GPIO_PIN_RESET) {
+        board_spi_cs_changed(port, pin, 1); /* hold off the CAN interrupt first */
+    }
     port->BSRR = state == GPIO_PIN_SET ? pin : (uint32_t)pin << 16;
+    if (state == GPIO_PIN_SET) {
+        board_spi_cs_changed(port, pin, 0);
+    }
 }
 
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin)

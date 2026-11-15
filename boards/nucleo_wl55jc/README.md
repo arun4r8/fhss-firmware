@@ -94,7 +94,7 @@ The STM32WL55 has no CAN controller, so the HW-184 board's **MCP2515** provides 
 | HW-184 SCK | CN10 pin 11 (PA5, D13) | Shared with the radio shield (SPI1) |
 | HW-184 SI | CN10 pin 15 (PA7, D11) | Shared (MOSI) |
 | HW-184 SO | CN10 pin 13 (PA6, D12) | Shared (MISO). The MCP2515 releases it when CS is high |
-| HW-184 INT | not connected | The firmware polls |
+| HW-184 INT | CN10 pin 25 (PB10, Arduino D6) | Optional: only `CAN_IRQ=1` builds use it (receive interrupt + buffer). Polled builds ignore it |
 | Adafruit Vcc | 3V3 | Sets its logic level to 3.3 V; it makes its own 5 V for the bus |
 | Adafruit GND | GND | Also the bus common ground, per the embedded team's doc |
 | Adafruit SLNT | GND | Normal mode (high would be listen-only) |
@@ -113,6 +113,7 @@ The LoRa shield occupies the Arduino sockets, so the CAN wires go on the Nucleo'
 | MISO (PA6, D12) | CN10 pin 13 |
 | MOSI (PA7, D11) | CN10 pin 15 |
 | CAN CS (PB5, D4) | CN10 pin 29 |
+| CAN INT (PB10, D6) | CN10 pin 25, two pins above CS |
 | 3V3 | CN7 pin 16 |
 | GND | CN10 pin 9 (also CN7 8, 19, 20, 22; CN10 20) |
 
@@ -134,6 +135,22 @@ Check 6 runs the MCP2515 in **loopback mode**. That proves:
 - That the controller sends and receives a frame internally.
 
 It doesn't touch the transceiver or the bus. Testing those needs a second CAN node on the wires, such as the embedded team's board or a USB-CAN adapter.
+
+### Interrupt-driven CAN receive (`CAN_IRQ=1`)
+
+The MCP2515 holds only two received frames. The hubs send about 160 frames/s, so in the default polled build any main-loop stall over ~12 ms can drop frames. With INT wired to D6:
+
+```
+make flash-swd APP=bridge ROLE=pod CAN_IRQ=1 SERIAL=...
+```
+
+- The MCP2515 pulls INT low whenever a frame is waiting. A falling edge on PB10 (EXTI line 10) runs a handler that moves the frame into a 64-frame ring buffer (`include/can_ring.h`) right away.
+- The main loop, and the radio's transmit wait, take frames from the ring.
+- The radio and the MCP2515 share SPI1. Every chip-select going low masks the CAN interrupt until it goes high again (`board_spi_cs_changed()` in `board.c`), so the handler never splits a radio or CAN transaction. An edge that arrives meanwhile stays pending and runs right after.
+- The status line adds `CAN ring max N dropped D`: the deepest the ring got, and frames lost because it was full (should stay 0).
+- The self-test reports whether INT is wired: `PASS CAN INT pin (D6)` when it is, `INFO CAN INT not wired` when it isn't.
+
+Host tests (`make test`, `test_mcp2515`) cover it against the emulated MCP2515: with the main loop stalled for 40 frames at a time, the polled path keeps 10 of 200 frames and the interrupt + ring path keeps all 200, in order.
 
 ## CAN bridge firmware
 

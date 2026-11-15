@@ -74,6 +74,10 @@ void board_init(void)
 
     /* MCP2515 chip-select idles high so it stays off the shared SPI bus */
     output(GPIOB, 5, 1); /* D4 */
+    /* MCP2515 INT (open drain, active low): input with pull-up, so an
+     * unwired pin reads "nothing waiting" */
+    pin_mode(GPIOB, 10, MODE_INPUT, 0);
+    GPIOB->PUPDR |= 1u << (10 * 2);
 
     /* SPI1 on PA5/PA6/PA7, AF5: master, mode 0, software NSS, PCLK/16 = 3 MHz
      * (SX1262 allows 16 MHz, MCP2515 10 MHz; kept low for breadboard jumpers) */
@@ -180,5 +184,67 @@ void HardFault_Handler(void)
 {
     GPIOB->BSRR = GPIO_PIN_11;
     for (;;) {
+    }
+}
+
+/* ---- MCP2515 receive interrupt ----------------------------------------- */
+
+static void (*can_irq_handler)(void);
+static volatile int can_irq_on;
+
+void board_can_irq_init(void (*handler)(void))
+{
+    can_irq_handler = handler;
+    /* EXTI line 10 from port B (EXTICR3 field 10: 1 = PB), falling edge,
+     * unmasked for CPU1 */
+    SYSCFG->EXTICR[2] = (SYSCFG->EXTICR[2] & ~SYSCFG_EXTICR3_EXTI10) | (1u << SYSCFG_EXTICR3_EXTI10_Pos);
+    EXTI->FTSR1 |= 1u << 10;
+    EXTI->RTSR1 &= ~(1u << 10);
+    EXTI->PR1 = 1u << 10;
+    EXTI->IMR1 |= 1u << 10;
+    can_irq_on = 1;
+    NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
+    NVIC_EnableIRQ(EXTI15_10_IRQn);
+    board_can_irq_kick(); /* frames that arrived before the edge detector was armed */
+}
+
+int board_can_int_low(void)
+{
+    return HAL_GPIO_ReadPin(CAN_INT_PORT, CAN_INT_PIN) == GPIO_PIN_RESET;
+}
+
+void board_can_irq_kick(void)
+{
+    if (can_irq_on && board_can_int_low()) {
+        NVIC_SetPendingIRQ(EXTI15_10_IRQn);
+    }
+}
+
+void EXTI15_10_IRQHandler(void)
+{
+    EXTI->PR1 = 1u << 10; /* clear first, so an edge during the handler pends again */
+    if (can_irq_handler) {
+        can_irq_handler();
+    }
+}
+
+/* Called around every SPI chip-select change. Low: mask the CAN interrupt
+ * before the transaction starts. High: unmask after it ends; an edge that
+ * came in meanwhile is still pending and runs then. Runs in the handler too
+ * (its own MCP2515 reads), where masking itself is harmless. */
+void board_spi_cs_changed(GPIO_TypeDef *port, uint16_t pin, int low)
+{
+    if (!can_irq_on) {
+        return;
+    }
+    if (!((port == RADIO_NSS_PORT && pin == RADIO_NSS_PIN) || (port == CAN_CS_PORT && pin == CAN_CS_PIN))) {
+        return;
+    }
+    if (low) {
+        NVIC_DisableIRQ(EXTI15_10_IRQn);
+        __DSB();
+        __ISB();
+    } else {
+        NVIC_EnableIRQ(EXTI15_10_IRQn);
     }
 }

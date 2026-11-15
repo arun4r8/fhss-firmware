@@ -198,7 +198,7 @@ mcp2515_err_t mcp2515_init(mcp2515_t *c)
         write_reg(c, REG_RXB0CTRL, RXM_ANY | BUKT);
         write_reg(c, REG_RXB1CTRL, RXM_ANY);
     }
-    write_reg(c, REG_CANINTE, 0x00); /* polled */
+    write_reg(c, REG_CANINTE, c->rx_irq ? 0x03 : 0x00); /* RX0IE | RX1IE, or polled */
     write_reg(c, REG_CANINTF, 0x00);
 
     uint8_t mode = c->mode == MCP2515_MODE_LOOPBACK ? MODE_LOOPBACK

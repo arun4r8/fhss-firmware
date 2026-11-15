@@ -259,3 +259,8 @@ void can_emu_add(mcp2515_emu_t *e)
         nodes[n_nodes++] = e;
     }
 }
+
+bool mcp2515_emu_int_low(const mcp2515_emu_t *e)
+{
+    return e->present && (e->regs[0x2B] & e->regs[CANINTF]) != 0;
+}

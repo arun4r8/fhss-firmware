@@ -16,7 +16,9 @@
  *
  *   CAN: MCP2515 (HW-184 board) shares SPI1 with the radio; its chip-select
  *   is Arduino D4 (PB5), which the SX1262 shield leaves free. Everything the
- *   CAN side needs is on labeled Arduino sockets. INT is not used (polled).
+ *   CAN side needs is on labeled Arduino sockets. INT goes to Arduino D6
+ *   (PB10, CN10 pin 25) for interrupt-driven receive (CAN_IRQ=1 builds);
+ *   left unwired, the firmware polls as before.
  *   The MCP2515's TXCAN/RXCAN go to an Adafruit TJA1051T/3 transceiver.
  *
  *   Console: LPUART1 PA2/PA3 -> ST-LINK virtual COM port, 115200 8N1
@@ -40,6 +42,8 @@
 
 #define CAN_CS_PORT     GPIOB
 #define CAN_CS_PIN      GPIO_PIN_5   /* Arduino D4 */
+#define CAN_INT_PORT    GPIOB
+#define CAN_INT_PIN     GPIO_PIN_10  /* Arduino D6, CN10 pin 25; MCP2515 INT, active low */
 
 #define LED_BLUE_PORT   GPIOB
 #define LED_BLUE_PIN    GPIO_PIN_15
@@ -51,6 +55,15 @@
 extern SPI_HandleTypeDef board_spi1;
 
 void board_init(void);
+
+/* MCP2515 INT on PB10 (EXTI line 10, falling edge). handler runs in
+ * interrupt context each time INT goes low. While either chip-select on the
+ * shared SPI bus is low, the interrupt is held off (HAL_GPIO_WritePin in
+ * hal_shim.c), so the handler never splits a radio or CAN transaction. */
+void board_can_irq_init(void (*handler)(void));
+int board_can_int_low(void);  /* 1 while the MCP2515 has a frame waiting */
+void board_can_irq_kick(void); /* rerun the handler if INT is low (missed edge) */
+void board_spi_cs_changed(GPIO_TypeDef *port, uint16_t pin, int low); /* from hal_shim */
 
 void uart_puts(const char *s);
 int uart_getc(void); /* next console character, -1 if none */

@@ -47,6 +47,7 @@
 
 #include "board.h"
 #include "can_bridge.h"
+#include "can_ring.h"
 #include "fhss_link.h"
 #include "mcp2515.h"
 #include "pod_cmd.h"
@@ -98,6 +99,15 @@
 #ifndef BRIDGE_RANGE
 #define BRIDGE_RANGE 0
 #endif
+/* CAN receive (pod). Default: polled from the main loop and while the radio
+ * transmits. CAN_IRQ=1 (needs HW-184 INT wired to D6): the MCP2515 raises INT
+ * for every received frame and the interrupt handler moves it into a
+ * 64-frame ring (can_ring.h) at once, so a main-loop stall no longer
+ * overflows the chip's 2 receive buffers; the main loop empties the ring. */
+#ifndef BRIDGE_CAN_IRQ
+#define BRIDGE_CAN_IRQ 0
+#endif
+#define CAN_IRQ_ON (BRIDGE_CAN_IRQ && BRIDGE_ROLE == ROLE_POD && !BRIDGE_RANGE)
 #ifndef TX_DBM
 #define TX_DBM (BRIDGE_RANGE ? 14 : 0) /* bench power 0 dBm; range tests 14 (TXDBM=..) */
 #endif
@@ -114,7 +124,9 @@ static mcp2515_t can = {
     .spi = &board_spi1, .cs_port = CAN_CS_PORT, .cs_pin = CAN_CS_PIN,
     .osc_hz = CAN_OSC_HZ, .bitrate = CAN_BITRATE,
     .mode = BRIDGE_DEMO ? MCP2515_MODE_LOOPBACK : MCP2515_MODE_NORMAL,
+    .rx_irq = CAN_IRQ_ON,
 };
+static can_ring_t can_rx; /* CAN_IRQ: filled by can_isr(), emptied by drain_can() */
 static int can_ok;
 static uint32_t can_tx_errors;
 static uint32_t hub_msgs_sent;
@@ -204,13 +216,41 @@ static bool radio_send(void *user, const uint8_t *data, uint8_t len)
     return fhss_link_send(&link, data, len);
 }
 
+/* CAN_IRQ: runs on every falling edge of INT. Empties the chip into the
+ * ring; at most 2 frames are waiting, the loop bound is a safety net. */
+static void can_isr(void)
+{
+    can_frame_t f;
+    for (int i = 0; i < 4 && board_can_int_low(); i++) {
+        if (!mcp2515_receive(&can, &f)) {
+            break;
+        }
+        can_ring_frame_t x = {.id = f.id, .dlc = f.dlc, .ms = HAL_GetTick()};
+        memcpy(x.data, f.data, f.dlc);
+        can_ring_push(&can_rx, &x);
+    }
+}
+
 /* Pod: move every waiting CAN frame into the bridge. Runs from the main loop
- * and while the radio transmits, since the MCP2515 holds only 2 frames. */
+ * and while the radio transmits. Polled: straight off the MCP2515, which
+ * holds only 2 frames. CAN_IRQ: out of the ring (never touches the chip, so
+ * it can't race the interrupt handler). */
 static void drain_can(void *user)
 {
     (void)user;
+    if (!can_ok) {
+        return;
+    }
+    if (CAN_IRQ_ON) {
+        board_can_irq_kick(); /* INT still low: an edge was missed, run the handler */
+        can_ring_frame_t x;
+        while (can_ring_pop(&can_rx, &x)) {
+            can_bridge_on_frame(&bridge, x.id, x.data, x.dlc, x.ms);
+        }
+        return;
+    }
     can_frame_t f;
-    while (can_ok && mcp2515_receive(&can, &f)) {
+    while (mcp2515_receive(&can, &f)) {
         can_bridge_on_frame(&bridge, f.id, f.data, f.dlc, HAL_GetTick());
     }
 }
@@ -418,6 +458,12 @@ static void print_status(void)
         uart_put_int((int32_t)bridge.snap.unmapped);
         uart_puts(", errors ");
         uart_put_int((int32_t)(b->reasm_errors + b->no_slot + b->radio_refused));
+        if (CAN_IRQ_ON) {
+            uart_puts(", CAN ring max ");
+            uart_put_int((int32_t)can_rx.max_depth);
+            uart_puts(" dropped ");
+            uart_put_int((int32_t)can_rx.dropped);
+        }
         uart_puts(", radio tx ");
         uart_put_int((int32_t)link.stats.tx_packets);
         uart_puts(", state ");
@@ -522,6 +568,11 @@ int main(void)
 
     int err = BRIDGE_RANGE ? MCP2515_OK : mcp2515_init(&can);
     can_ok = !BRIDGE_RANGE && err == MCP2515_OK;
+    if (CAN_IRQ_ON && can_ok) {
+        can_ring_init(&can_rx);
+        board_can_irq_init(can_isr);
+        uart_puts("CAN receive: interrupt (MCP2515 INT on D6) + 64-frame ring\n");
+    }
     if (!can_ok && !BRIDGE_RANGE) {
         uart_puts("CAN controller init failed, error ");
         uart_put_int(err);

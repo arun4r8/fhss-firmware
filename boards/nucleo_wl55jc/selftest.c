@@ -165,6 +165,7 @@ static void check_can(void)
     mcp2515_t can = {
         .spi = &board_spi1, .cs_port = CAN_CS_PORT, .cs_pin = CAN_CS_PIN,
         .osc_hz = CAN_OSC_HZ, .bitrate = CAN_BITRATE, .mode = MCP2515_MODE_LOOPBACK,
+        .rx_irq = true, /* also exercises the INT pin, if wired */
     };
     int err = mcp2515_init(&can);
     if (err != MCP2515_OK) {
@@ -177,14 +178,33 @@ static void check_can(void)
         return;
     }
     can_frame_t rx, tx = {.id = 0x5A3, .dlc = 8, .data = {0xDE, 0xAD, 0xBE, 0xEF, 1, 2, 3, 4}};
+    int int_idle_low = board_can_int_low();
     int ok = mcp2515_send(&can, &tx) == MCP2515_OK;
     uint32_t t0 = HAL_GetTick();
+    while (ok && !board_can_int_low() && HAL_GetTick() - t0 < 5) {
+    }
+    int int_went_low = board_can_int_low();
+    t0 = HAL_GetTick();
     int got = 0;
     while (ok && !got && HAL_GetTick() - t0 < 20) {
         got = mcp2515_receive(&can, &rx);
     }
     ok = ok && got && rx.id == tx.id && rx.dlc == 8 && memcmp(rx.data, tx.data, 8) == 0;
     check("CAN controller loopback (MCP2515)", ok);
+
+    /* INT (HW-184 INT -> D6 / PB10, CN10 pin 25) is only needed for CAN_IRQ=1
+     * builds, so an unwired pin is reported, not failed */
+    if (!ok) {
+        return;
+    }
+    if (int_idle_low || board_can_int_low()) {
+        check("CAN INT pin (D6): stuck low (shorted to GND, or wired to the wrong pin?)", 0);
+    } else if (int_went_low) {
+        check("CAN INT pin (D6): low while a frame waits, released after reading", 1);
+    } else {
+        uart_puts("  INFO  CAN INT not wired to D6 (CN10 pin 25): fine for polled builds,\n"
+                  "        needed for CAN_IRQ=1\n");
+    }
 }
 
 static void run_leader(void)
