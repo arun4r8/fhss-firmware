@@ -12,7 +12,7 @@ CORE_SRC := src/fhss.c
 PORT_SRC := $(PORT)/sx1262.c $(PORT)/fhss_link.c
 EMU_SRC  := $(MOCKS)/sx1262_emu.c
 CAN_DRV  := drivers/mcp2515
-BRIDGE_SRC := src/can_bridge.c src/can_msg.c src/telem_frame.c
+BRIDGE_SRC := src/can_bridge.c src/can_msg.c src/telem_frame.c src/pod_cmd.c
 
 .PHONY: all test clean
 
@@ -24,6 +24,7 @@ $(BUILD)/fhss.o: $(CORE_SRC) include/fhss.h | $(BUILD)
 	$(CC) $(CFLAGS) -fsyntax-only src/can_bridge.c
 	$(CC) $(CFLAGS) -fsyntax-only src/telem_frame.c
 	$(CC) $(CFLAGS) -fsyntax-only src/range_test.c
+	$(CC) $(CFLAGS) -fsyntax-only src/pod_cmd.c
 	$(CC) $(CFLAGS) $(MOCKHAL) -I$(MOCKS) -I$(CAN_DRV) -fsyntax-only $(CAN_DRV)/mcp2515.c
 
 # Port sources under the strict flags, against the mock HAL header.
@@ -51,9 +52,9 @@ $(BUILD)/test_can_bridge: $(BRIDGE_SRC) tests/test_can_bridge.c include/can_brid
 $(BUILD)/test_range: src/range_test.c tests/test_range.c include/range_test.h | $(BUILD)
 	$(CC) $(CFLAGS) $(TESTFLAGS) src/range_test.c tests/test_range.c -o $@
 
-$(BUILD)/test_telem_frame: src/telem_frame.c src/can_msg.c tests/test_telem_frame.c \
-		include/telem_frame.h include/can_msg.h | $(BUILD)
-	$(CC) $(CFLAGS) $(TESTFLAGS) src/telem_frame.c src/can_msg.c tests/test_telem_frame.c -o $@
+$(BUILD)/test_telem_frame: src/telem_frame.c src/can_msg.c src/pod_cmd.c tests/test_telem_frame.c \
+		include/telem_frame.h include/can_msg.h include/pod_cmd.h | $(BUILD)
+	$(CC) $(CFLAGS) $(TESTFLAGS) src/telem_frame.c src/can_msg.c src/pod_cmd.c tests/test_telem_frame.c -o $@
 
 $(BUILD)/test_mcp2515: $(CAN_DRV)/mcp2515.c $(CAN_DRV)/mcp2515.h $(MOCKS)/mcp2515_emu.c \
 		$(MOCKS)/mcp2515_emu.h tests/test_mcp2515.c | $(BUILD)

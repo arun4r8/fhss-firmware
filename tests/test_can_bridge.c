@@ -331,7 +331,7 @@ static void test_slots(void)
 static can_bridge_config_t frame_config(radio_t *r)
 {
     can_bridge_config_t c = config(r);
-    c.max_payload = 77;
+    c.max_payload = 78;
     c.schema = &telem_schema_placeholder;
     return c;
 }
@@ -351,9 +351,9 @@ static void test_frame_config(void)
     static can_bridge_t b;
     radio_t r;
     can_bridge_config_t c = frame_config(&r);
-    CHECK(can_bridge_init(&b, &c), "77-byte frame in a 77-byte payload rejected");
-    c.max_payload = 76;
-    CHECK(!can_bridge_init(&b, &c), "77-byte frame accepted into a 76-byte payload");
+    CHECK(can_bridge_init(&b, &c), "78-byte frame in a 78-byte payload rejected");
+    c.max_payload = 77;
+    CHECK(!can_bridge_init(&b, &c), "78-byte frame accepted into a 77-byte payload");
     telem_slot_t dup[] = {{1, 1, 0}, {1, 1, 0}};
     telem_schema_t bad = {.version = 1, .count = 2, .slot = dup};
     c = frame_config(&r);
@@ -363,7 +363,7 @@ static void test_frame_config(void)
 
 static void test_frame_mode(void)
 {
-    printf("frame mode: four hubs -> one 77-byte frame, sent only when something changed\n");
+    printf("frame mode: four hubs -> one 78-byte frame, sent only when something changed\n");
     static can_bridge_t pod, gnd;
     radio_t r, unused;
     can_bridge_config_t c = frame_config(&r);
@@ -381,7 +381,7 @@ static void test_frame_mode(void)
     r.busy = true;
     CHECK(!can_bridge_poll(&pod), "sent while the radio was busy");
     r.busy = false;
-    CHECK(can_bridge_poll(&pod) && r.n == 1 && r.len[0] == 77, "one 77-byte frame expected, got %d", r.n);
+    CHECK(can_bridge_poll(&pod) && r.n == 1 && r.len[0] == 78, "one 78-byte frame expected, got %d", r.n);
     CHECK(!can_bridge_poll(&pod) && r.n == 1, "same data sent twice");
 
     uint16_t v[38];

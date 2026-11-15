@@ -90,6 +90,7 @@ typedef struct {
     uint8_t next_sender; /* round-robin position */
     telem_snapshot_t snap; /* frame mode, pod: latest reading of every sensor */
     int16_t last_seq;      /* frame mode, ground: last sequence seen, -1 none */
+    int8_t rx_state;       /* frame mode, ground: pod state in the last frame, -1 none */
     can_bridge_stats_t stats;
 } can_bridge_t;
 
@@ -118,6 +119,9 @@ uint8_t can_bridge_fill(can_bridge_t *b, uint8_t *buf, uint8_t max);
 
 /* Ground side, frame mode: check and unpack a received frame into
  * readings (schema->count entries). false for an invalid payload. */
+/* Pod side, frame mode: the pod state to report in every frame (0..15). */
+void can_bridge_set_state(can_bridge_t *b, uint8_t state);
+
 bool can_bridge_frame_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_t len,
                                  uint16_t *readings);
 

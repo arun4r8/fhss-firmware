@@ -115,6 +115,14 @@ static void uart_putc(char c)
     uart_head = uart_head + 1u;
 }
 
+int uart_getc(void)
+{
+    if (LPUART1->ISR & USART_ISR_ORE) {
+        LPUART1->ICR = USART_ICR_ORECF; /* overrun: drop it, keep receiving */
+    }
+    return (LPUART1->ISR & USART_ISR_RXNE_RXFNE) ? (int)(LPUART1->RDR & 0xFFu) : -1;
+}
+
 void uart_puts(const char *s)
 {
     while (*s) {

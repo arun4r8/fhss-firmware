@@ -82,7 +82,7 @@ ifneq ($(TXDBM),)
   BRIDGE_DEFS += -DTX_DBM=$(TXDBM)
   BRIDGE_NAME := $(BRIDGE_NAME)-$(TXDBM)dbm
 endif
-BRIDGE_SRCS := bridge.c $(ROOT)/src/can_bridge.c $(ROOT)/src/telem_frame.c $(ROOT)/src/range_test.c $(ROOT)/src/can_msg.c
+BRIDGE_SRCS := bridge.c $(ROOT)/src/can_bridge.c $(ROOT)/src/telem_frame.c $(ROOT)/src/range_test.c $(ROOT)/src/pod_cmd.c $(ROOT)/src/can_msg.c
 
 APP ?= selftest
 FLASH_BIN := $(BUILD)/$(if $(filter bridge,$(APP)),$(BRIDGE_NAME),selftest).bin

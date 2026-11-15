@@ -10,6 +10,7 @@
 #include "fhss_link.h"
 #include "sx1262.h"
 #include "sx1262_emu.h"
+#include "pod_cmd.h"
 
 static int failures;
 static int checks;
@@ -481,14 +482,14 @@ static void run_max_payload(uint32_t bw_hz, uint16_t leader_slot_ms, int want_le
 
 static void test_link_max_payload(void)
 {
-    printf("max-size payloads back to back, 200/200 split: one 77 B packet per slot each way\n");
-    run_max_payload(0, 0, 77, 77, 2.5, 2.5);
-    printf("lopsided 330/70 split: two 77 B packets per hop down, one 9 B packet up\n");
-    run_max_payload(0, 330, 77, 9, 5.0, 2.5);
-    printf("250 kHz, 200/200 split: two 77 B packets per slot each way\n");
-    run_max_payload(250000, 0, 77, 77, 5.0, 5.0);
-    printf("250 kHz, 340/60 split: four 77 B packets per hop down, one 30 B packet up\n");
-    run_max_payload(250000, 340, 77, 30, 10.0, 2.5);
+    printf("max-size payloads back to back, 200/200 split: one 78 B packet per slot each way\n");
+    run_max_payload(0, 0, 78, 78, 2.5, 2.5);
+    printf("lopsided 330/70 split: two 78 B packets per hop down, one 9 B packet up\n");
+    run_max_payload(0, 330, 78, 9, 5.0, 2.5);
+    printf("250 kHz, 200/200 split: two 78 B packets per slot each way\n");
+    run_max_payload(250000, 0, 78, 78, 5.0, 5.0);
+    printf("250 kHz, 340/60 split: four 78 B packets per hop down, one 30 B packet up\n");
+    run_max_payload(250000, 340, 78, 30, 10.0, 2.5);
     printf("split leaving no room for a packet is refused\n");
     emu_reset_world();
     static sx1262_emu_t e;
@@ -728,8 +729,11 @@ static void frame_pod_on_rx(void *user, const uint8_t *data, uint8_t len, int16_
 {
     (void)rssi;
     frame_node_t *n = user;
-    if (len >= 3 && memcmp(data, "CMD", 3) == 0) {
+    uint8_t state;
+    uint16_t seq;
+    if (pod_cmd_parse(data, len, &state, &seq)) {
         n->cmds++;
+        can_bridge_set_state(&n->bridge, state); /* stand-in for the VCU acting on it */
     }
 }
 
@@ -755,7 +759,7 @@ static void frame_hub_traffic(void *user)
     }
 }
 
-static void run_frames_over_link(uint32_t bw_hz, uint16_t slot_ms, uint8_t cmd_len,
+static void run_frames_over_link(uint32_t bw_hz, uint16_t slot_ms,
                                  int want_per_s, uint32_t max_age_ms)
 {
     emu_reset_world();
@@ -794,22 +798,42 @@ static void run_frames_over_link(uint32_t bw_hz, uint16_t slot_ms, uint8_t cmd_l
 
     uint32_t t_lock = 0, next_cmd = 0;
     int cmds_sent = 0;
+    /* state loop: the ground's target changes every 10 s; time until the
+     * pod's frames report it */
+    uint8_t target = 0;
+    uint32_t target_ms = 0, worst_match_ms = 0, next_change = 0;
+    int changes = 0, matches = 0;
+    bool matched = true;
     fhub_next_ms = 0;
     fhub_msgs = 0;
     while (emu_now_ms < 60000) {
         if (!t_lock && fhss_link_locked(&gnd_link)) {
             t_lock = emu_now_ms;
             next_cmd = emu_now_ms;
+            next_change = emu_now_ms + 5000;
         }
-        /* the ground sends a command filling its slot every 400 ms once locked */
+        if (t_lock && emu_now_ms >= next_change) {
+            next_change = emu_now_ms + 10000;
+            target = (uint8_t)((target + 5) & 0x0F);
+            target_ms = emu_now_ms;
+            matched = false;
+            changes++;
+        }
+        /* the ground sends its target state every 400 ms once locked */
         if (t_lock && emu_now_ms >= next_cmd) {
-            uint8_t cmd[FHSS_LINK_MAX_PAYLOAD];
-            memset(cmd, 'x', sizeof(cmd));
-            memcpy(cmd, "CMD", 3);
-            if (fhss_link_send(&gnd_link, cmd, cmd_len)) {
+            uint8_t cmd[POD_CMD_LEN];
+            pod_cmd_build(target, (uint16_t)cmds_sent, cmd, sizeof(cmd));
+            if (fhss_link_send(&gnd_link, cmd, sizeof(cmd))) {
                 cmds_sent++;
             }
             next_cmd += 400;
+        }
+        if (!matched && gnd.bridge.rx_state == target) {
+            matched = true;
+            matches++;
+            if (emu_now_ms - target_ms > worst_match_ms) {
+                worst_match_ms = emu_now_ms - target_ms;
+            }
         }
         frame_hub_traffic(&pod);
         fhss_link_poll(&pod_link);
@@ -822,7 +846,12 @@ static void run_frames_over_link(uint32_t bw_hz, uint16_t slot_ms, uint8_t cmd_l
            fhub_msgs, pod.bridge.stats.messages_sent, gnd.frames, locked_s,
            locked_s ? (double)gnd.frames / locked_s : 0.0, gnd.bridge.stats.frames_missed,
            gnd.max_age_ms, pod.cmds, cmds_sent);
+    printf("  pod state: %d target changes, %d confirmed in frames, slowest %u ms\n", changes, matches,
+           worst_match_ms);
     CHECK(t_lock, "ground never locked");
+    CHECK(changes >= 5 && matches == changes, "state changes %d, confirmed %d", changes, matches);
+    /* command at the end of a hop, then the pod's next frame: about one hop */
+    CHECK(worst_match_ms <= 900, "state took %u ms to show up in the pod's frames", worst_match_ms);
     CHECK(gnd.bad == 0 && gnd.bridge.stats.radio_bad == 0, "%d bad frames", gnd.bad);
     CHECK(pod.bridge.stats.messages_in == (uint32_t)fhub_msgs && pod.bridge.stats.reasm_errors == 0 &&
           pod.bridge.snap.unmapped == 0, "pod took %u of %d messages, %u unmapped",
@@ -842,9 +871,9 @@ static void run_frames_over_link(uint32_t bw_hz, uint16_t slot_ms, uint8_t cmd_l
 static void test_frames_over_link(void)
 {
     printf("frame mode: 4 hubs (38 sensors) -> one frame per packet -> 330/70 link (60 s)\n");
-    run_frames_over_link(0, 330, 9, 5, 270);
+    run_frames_over_link(0, 330, 5, 270);
     printf("frame mode at 250 kHz, 340/60 split: 4 frames per hop, 30 B commands (60 s)\n");
-    run_frames_over_link(250000, 340, 30, 10, 190);
+    run_frames_over_link(250000, 340, 10, 190);
 }
 
 int main(void)

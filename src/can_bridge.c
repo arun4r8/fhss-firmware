@@ -16,6 +16,7 @@ bool can_bridge_init(can_bridge_t *b, const can_bridge_config_t *cfg)
     b->cfg = *cfg;
     telem_snapshot_init(&b->snap);
     b->last_seq = -1;
+    b->rx_state = -1;
     return true;
 }
 
@@ -148,7 +149,8 @@ bool can_bridge_frame_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_
                                  uint16_t *readings)
 {
     uint8_t seq;
-    if (!b->cfg.schema || !telem_frame_decode(b->cfg.schema, payload, len, readings, &seq)) {
+    uint8_t state;
+    if (!b->cfg.schema || !telem_frame_decode(b->cfg.schema, payload, len, readings, &seq, &state)) {
         b->stats.radio_bad++;
         return false;
     }
@@ -157,6 +159,7 @@ bool can_bridge_frame_from_radio(can_bridge_t *b, const uint8_t *payload, uint8_
         b->stats.frames_missed += (uint32_t)((seq - b->last_seq - 1) & 0x0F);
     }
     b->last_seq = seq;
+    b->rx_state = (int8_t)state;
     return true;
 }
 
@@ -171,4 +174,9 @@ uint8_t can_bridge_fill(can_bridge_t *b, uint8_t *buf, uint8_t max)
         b->stats.chunks_sent++;
     }
     return (uint8_t)n;
+}
+
+void can_bridge_set_state(can_bridge_t *b, uint8_t state)
+{
+    telem_snapshot_set_state(&b->snap, state);
 }

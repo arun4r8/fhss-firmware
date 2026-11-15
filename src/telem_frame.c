@@ -12,7 +12,7 @@ static const telem_slot_t placeholder_slots[] = {
 #undef S
 
 const telem_schema_t telem_schema_placeholder = {
-    .version = 1,
+    .version = 2, /* 2: state byte added after the header */
     .count = (uint8_t)(sizeof(placeholder_slots) / sizeof(placeholder_slots[0])),
     .slot = placeholder_slots,
 };
@@ -44,7 +44,16 @@ bool telem_schema_valid(const telem_schema_t *s)
 
 size_t telem_frame_length(const telem_schema_t *s)
 {
-    return 1u + 2u * s->count;
+    return 2u + 2u * s->count;
+}
+
+void telem_snapshot_set_state(telem_snapshot_t *snap, uint8_t state)
+{
+    state &= 0x0F;
+    if (state != snap->state) {
+        snap->state = state;
+        snap->updated = true;
+    }
 }
 
 void telem_snapshot_init(telem_snapshot_t *snap)
@@ -95,9 +104,10 @@ size_t telem_frame_build(telem_snapshot_t *snap, const telem_schema_t *s, uint8_
         return 0;
     }
     out[0] = (uint8_t)((s->version << 4) | (snap->seq & 0x0F));
+    out[1] = (uint8_t)(snap->state << 4);
     for (uint8_t i = 0; i < s->count; i++) {
-        out[1 + 2 * i] = (uint8_t)(snap->reading[i] >> 8);
-        out[2 + 2 * i] = (uint8_t)snap->reading[i];
+        out[2 + 2 * i] = (uint8_t)(snap->reading[i] >> 8);
+        out[3 + 2 * i] = (uint8_t)snap->reading[i];
     }
     snap->seq = (uint8_t)((snap->seq + 1) & 0x0F);
     snap->updated = false;
@@ -105,15 +115,18 @@ size_t telem_frame_build(telem_snapshot_t *snap, const telem_schema_t *s, uint8_
 }
 
 bool telem_frame_decode(const telem_schema_t *s, const uint8_t *in, size_t len,
-                        uint16_t *readings, uint8_t *seq)
+                        uint16_t *readings, uint8_t *seq, uint8_t *state)
 {
     if (len != telem_frame_length(s) || (in[0] >> 4) != s->version) {
         return false;
     }
     for (uint8_t i = 0; i < s->count; i++) {
-        readings[i] = (uint16_t)((in[1 + 2 * i] << 8) | in[2 + 2 * i]);
+        readings[i] = (uint16_t)((in[2 + 2 * i] << 8) | in[3 + 2 * i]);
     }
     *seq = in[0] & 0x0F;
+    if (state) {
+        *state = in[1] >> 4;
+    }
     return true;
 }
 

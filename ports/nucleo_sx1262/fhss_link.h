@@ -19,7 +19,7 @@
 #include "fhss.h"
 #include "sx1262.h"
 
-#define FHSS_LINK_MAX_PAYLOAD 77 /* one 38-sensor telemetry frame (telem_frame.h) */
+#define FHSS_LINK_MAX_PAYLOAD 78 /* one 38-sensor telemetry frame (telem_frame.h) */
 #define FHSS_LINK_QUEUE_LEN   8
 #define FHSS_LINK_HEADER_LEN  (2 + FHSS_SYNC_WIRE_SIZE)
 

@@ -49,6 +49,7 @@
 #include "can_bridge.h"
 #include "fhss_link.h"
 #include "mcp2515.h"
+#include "pod_cmd.h"
 #include "range_test.h"
 #include "telem_frame.h"
 
@@ -71,6 +72,7 @@
 #define HUB_ID_MASK     0x000u   /* 0 = forward every ID */
 #define HUB_ID_MATCH    0x000u
 #define GROUND_ID_BASE  0x200u
+#define VCU_STATE_CMD_ID 0x300u  /* pod -> VCU: commanded state (placeholder) */
 /* sensor order: placeholder until the embedded team sends the real one */
 #define TELEM_SCHEMA    telem_schema_placeholder
 /* LoRa bandwidth and the pod's share of each 400 ms hop; both must be the
@@ -81,11 +83,10 @@
 #ifndef BRIDGE_BW250
 #define BRIDGE_BW250 0
 #endif
-/* Until the embedded team defines real commands, the ground sends a dummy
- * command every hop (as long as its slot allows: 9 B at 125 kHz, 30 B at
- * 250 kHz) so the ground -> pod direction is exercised on hardware:
- * "CMD", a 16-bit counter, then a counting byte pattern. The pod checks and
- * counts them. Set to 0 once real commands exist. */
+/* The ground sends its target pod state every hop (pod_cmd.h, 4 bytes):
+ * type "s" and a hex digit on the ground's console to change it, e.g. "s3".
+ * The pod reports its state in every frame; the ground logs
+ * STATE,<ms>,<target>,<pod>,<ms to confirm> when they match. */
 #ifndef GROUND_TEST_CMDS
 #define GROUND_TEST_CMDS 1
 #endif
@@ -125,29 +126,27 @@ static uint16_t range_seq;
 static int8_t up_rssi_last, up_snr_last;
 static uint32_t rng_ok, rng_bad, rng_bit_errors, rng_bits;
 
-/* Ground: queue the next dummy command (fills this node's slot). */
-static void send_test_cmd(void)
+/* Ground: queue the command for this hop: the pod state we want (POD_CMD_LEN
+ * bytes, sent every hop so a lost one is repeated on the next). */
+static uint8_t target_state;
+static uint32_t target_set_ms, state_confirm_ms;
+static bool state_confirmed = true;
+
+static void send_state_cmd(void)
 {
-    uint8_t c[FHSS_LINK_MAX_PAYLOAD];
-    uint8_t n = link.max_send_len;
-    if (n < 5) {
-        return; /* no room for "CMD" + counter */
-    }
-    c[0] = 'C';
-    c[1] = 'M';
-    c[2] = 'D';
-    c[3] = (uint8_t)(cmd_seq >> 8);
-    c[4] = (uint8_t)cmd_seq;
-    for (uint8_t i = 5; i < n; i++) {
-        c[i] = (uint8_t)(cmd_seq + i);
-    }
-    if (fhss_link_send(&link, c, n)) {
+    uint8_t c[POD_CMD_LEN];
+    pod_cmd_build(target_state, cmd_seq, c, sizeof(c));
+    if (fhss_link_send(&link, c, sizeof(c))) {
         cmd_seq++;
         cmds_sent++;
     }
 }
 
-/* Pod: payloads from the ground (only dummy commands for now). */
+/* Pod: commands from the ground. The commanded state goes to the VCU on
+ * CAN (ID VCU_STATE_CMD_ID, 1 byte); until embedded defines how the VCU
+ * reports the state it is actually in, the pod reports the commanded one. */
+static uint8_t pod_state;
+
 static void pod_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi_dbm)
 {
     (void)user;
@@ -155,12 +154,9 @@ static void pod_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi
     if (len == 0) {
         return;
     }
-    bool ok = len >= 5 && data[0] == 'C' && data[1] == 'M' && data[2] == 'D';
-    uint16_t seq = ok ? (uint16_t)((data[3] << 8) | data[4]) : 0;
-    for (uint8_t i = 5; ok && i < len; i++) {
-        ok = data[i] == (uint8_t)(seq + i);
-    }
-    if (!ok) {
+    uint8_t state;
+    uint16_t seq;
+    if (!pod_cmd_parse(data, len, &state, &seq)) {
         cmds_bad++;
         return;
     }
@@ -171,6 +167,16 @@ static void pod_on_rx(void *user, const uint8_t *data, uint8_t len, int16_t rssi
     cmds_ok++;
     up_rssi_last = (int8_t)(rssi_dbm < -128 ? -128 : rssi_dbm);
     up_snr_last = link.last_snr_q4;
+    if (state != pod_state) {
+        pod_state = state;
+        if (can_ok) {
+            can_frame_t f = {.id = VCU_STATE_CMD_ID, .dlc = 1, .data = {state}};
+            if (mcp2515_send(&can, &f) != MCP2515_OK) {
+                can_tx_errors++;
+            }
+        }
+    }
+    can_bridge_set_state(&bridge, pod_state);
 }
 
 static bool radio_idle(void *user)
@@ -204,7 +210,9 @@ static void print_frame(const uint16_t *v, int16_t rssi)
     const telem_schema_t *sc = &TELEM_SCHEMA;
     uart_puts("rx frame, rssi ");
     uart_put_int(rssi);
-    uart_puts(" dBm:");
+    uart_puts(" dBm, pod state ");
+    uart_put_int(bridge.rx_state);
+    uart_puts(":");
     for (uint8_t i = 0; i < sc->count; i++) {
         uart_puts(" ");
         uart_put_int(sc->slot[i].hub);
@@ -401,6 +409,8 @@ static void print_status(void)
         uart_put_int((int32_t)(b->reasm_errors + b->no_slot + b->radio_refused));
         uart_puts(", radio tx ");
         uart_put_int((int32_t)link.stats.tx_packets);
+        uart_puts(", state ");
+        uart_put_int(pod_state);
         uart_puts(", ground cmds ok ");
         uart_put_int((int32_t)cmds_ok);
         uart_puts(", missed ");
@@ -432,11 +442,13 @@ static void print_status(void)
         uart_puts(", crc errors ");
         uart_put_int((int32_t)link.stats.rx_crc_errors);
         if (GROUND_TEST_CMDS) {
-            uart_puts(", test cmds sent ");
+            uart_puts(", state target ");
+            uart_put_int(target_state);
+            uart_puts(" pod ");
+            uart_put_int(bridge.rx_state);
+            uart_puts(state_confirmed ? " (confirmed)" : " (waiting)");
+            uart_puts(", cmds sent ");
             uart_put_int((int32_t)cmds_sent);
-            uart_puts(" (");
-            uart_put_int(link.max_send_len);
-            uart_puts(" B)");
         }
         if (can_ok && BRIDGE_HUB) {
             uart_puts(", hub 4 msgs put on CAN ");
@@ -587,7 +599,37 @@ int main(void)
                 demo_hub_message();
             }
             if (GROUND_TEST_CMDS && link.q_count == 0 && fhss_link_locked(&link)) {
-                send_test_cmd();
+                send_state_cmd();
+            }
+            /* console: "s" + hex digit sets the target state */
+            static bool want_digit;
+            int ch = uart_getc();
+            if (ch >= 0) {
+                int v = ch >= '0' && ch <= '9' ? ch - '0'
+                        : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10
+                        : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1;
+                if (want_digit && v >= 0) {
+                    target_state = (uint8_t)v;
+                    target_set_ms = HAL_GetTick();
+                    state_confirmed = false;
+                    uart_puts("target state ");
+                    uart_put_int(target_state);
+                    uart_puts("\n");
+                }
+                want_digit = ch == 's' || ch == 'S';
+            }
+            if (!state_confirmed && bridge.rx_state == (int8_t)target_state) {
+                state_confirmed = true;
+                state_confirm_ms = HAL_GetTick() - target_set_ms;
+                uart_puts("STATE,");
+                uart_put_int((int32_t)HAL_GetTick());
+                uart_puts(",");
+                uart_put_int(target_state);
+                uart_puts(",");
+                uart_put_int(bridge.rx_state);
+                uart_puts(",");
+                uart_put_int((int32_t)state_confirm_ms);
+                uart_puts("\n");
             }
         }
         /* what the next transmission would carry, to log its length */
