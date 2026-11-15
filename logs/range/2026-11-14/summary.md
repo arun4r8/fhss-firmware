@@ -35,12 +35,14 @@
 
 **Likely noise sources, to check next**
 
-| Suspect | Why | Test |
-|---|---|---|
-| MCU clock | It went from 4 to 48 MHz just before this test. 19 × 48 MHz = 912 MHz, inside the band, and the worst channel was 912.7 MHz. The self-test's noise scan on the bench was −102 dBm average at 48 MHz on 11-14, against −111 dBm at 4 MHz on 10-04. | Noise scan (self-test) at 4 and 48 MHz in the same place. Then try the 32 MHz HSE clock (no in-band harmonic) |
-| Laptop / USB next to the ground radio | Common source of broadband noise | Ground board on a USB extension cable, 2 m from the laptop |
-| Power bank switching noise at the pod | Pod-side noise was the worst | Pod on a different battery, or a linear supply |
-| Ambient 915 MHz traffic | Smart meters, RFID, LoRaWAN | Brennen's SDR sweep of 902–928 MHz at the test site |
+The ground board was powered from the laptop's USB port during the test (team note, 11-15), so the laptop is the most likely source of the ground-side noise. It doesn't explain the pod side: the pod was on a power bank far from the laptop, yet its noise (about −89 dBm) was worse than the ground's (−95 to −99 dBm).
+
+| Suspect | Side | Why | Test |
+|---|---|---|---|
+| **Laptop USB power and the laptop itself** | Ground | Ground radio was powered from, and sitting next to, the laptop: a common source of broadband noise | Power the ground board from a battery or a USB isolator, antenna on a cable 2 m from the laptop; repeat the noise scan |
+| Power bank switching noise | Pod | Pod-side noise was the worst | Pod on a different battery, or a linear supply |
+| MCU clock | Both | It went from 4 to 48 MHz just before this test. 19 × 48 MHz = 912 MHz, inside the band, and the worst channel was 912.7 MHz. The self-test noise scan on the bench was −102 dBm average at 48 MHz (11-14) against −111 dBm at 4 MHz (10-04). | Noise scan (self-test) at 4 and 48 MHz in the same place |
+| Ambient 915 MHz traffic | Both | Smart meters, RFID, LoRaWAN | Brennen's SDR sweep of 902–928 MHz at the test site |
 
 **Next tests**
 - Repeat after the noise checks above.
