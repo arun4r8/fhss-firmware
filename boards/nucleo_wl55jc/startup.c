@@ -1,7 +1,7 @@
 /*
  * startup.c - Cortex-M4 (CPU1) vector table and reset for the STM32WL55.
  * Core exceptions plus peripheral IRQs up to EXTI15_10 (IRQ 41), the only
- * peripheral interrupt used (MCP2515 INT, CAN_IRQ=1 builds); the rest of
+ * peripheral interrupt used (MCP2515 INT, pod builds); the rest of
  * the firmware polls.
  */
 #include <stdint.h>

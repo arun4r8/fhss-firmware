@@ -17,8 +17,8 @@
  *   CAN: MCP2515 (HW-184 board) shares SPI1 with the radio; its chip-select
  *   is Arduino D4 (PB5), which the SX1262 shield leaves free. Everything the
  *   CAN side needs is on labeled Arduino sockets. INT goes to Arduino D6
- *   (PB10, CN10 pin 25) for interrupt-driven receive (CAN_IRQ=1 builds);
- *   left unwired, the firmware polls as before.
+ *   (PB10, CN10 pin 25) for interrupt-driven receive (default pod build);
+ *   a board without it needs a CAN_IRQ=0 (polled) build.
  *   The MCP2515's TXCAN/RXCAN go to an Adafruit TJA1051T/3 transceiver.
  *
  *   Console: LPUART1 PA2/PA3 -> ST-LINK virtual COM port, 115200 8N1

@@ -94,7 +94,7 @@ The STM32WL55 has no CAN controller, so the HW-184 board's **MCP2515** provides 
 | HW-184 SCK | CN10 pin 11 (PA5, D13) | Shared with the radio shield (SPI1) |
 | HW-184 SI | CN10 pin 15 (PA7, D11) | Shared (MOSI) |
 | HW-184 SO | CN10 pin 13 (PA6, D12) | Shared (MISO). The MCP2515 releases it when CS is high |
-| HW-184 INT | CN10 pin 25 (PB10, Arduino D6) | Optional: only `CAN_IRQ=1` builds use it (receive interrupt + buffer). Polled builds ignore it |
+| HW-184 INT | CN10 pin 25 (PB10, Arduino D6) | **Needed by the default pod build** (receive interrupt + buffer). Without it, build with `CAN_IRQ=0` |
 | Adafruit Vcc | 3V3 | Sets its logic level to 3.3 V; it makes its own 5 V for the bus |
 | Adafruit GND | GND | Also the bus common ground, per the embedded team's doc |
 | Adafruit SLNT | GND | Normal mode (high would be listen-only) |
@@ -136,12 +136,13 @@ Check 6 runs the MCP2515 in **loopback mode**. That proves:
 
 It doesn't touch the transceiver or the bus. Testing those needs a second CAN node on the wires, such as the embedded team's board or a USB-CAN adapter.
 
-### Interrupt-driven CAN receive (`CAN_IRQ=1`)
+### Interrupt-driven CAN receive (default)
 
-The MCP2515 holds only two received frames. The hubs send about 160 frames/s, so in the default polled build any main-loop stall over ~12 ms can drop frames. With INT wired to D6:
+The MCP2515 holds only two received frames. The hubs send about 160 frames/s, so a polled pod drops frames whenever its main loop stalls for more than ~12 ms. Since 11-15 the pod build receives by interrupt; it needs INT wired to D6. A board without that wire must be built with `CAN_IRQ=0` (polled), or it receives no CAN at all:
 
 ```
-make flash-swd APP=bridge ROLE=pod CAN_IRQ=1 SERIAL=...
+make flash-swd APP=bridge ROLE=pod SERIAL=...            # interrupt (default)
+make flash-swd APP=bridge ROLE=pod CAN_IRQ=0 SERIAL=...  # polled, no INT wire
 ```
 
 - The MCP2515 pulls INT low whenever a frame is waiting. A falling edge on PB10 (EXTI line 10) runs a handler that moves the frame into a 64-frame ring buffer (`include/can_ring.h`) right away.

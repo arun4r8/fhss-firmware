@@ -99,13 +99,14 @@
 #ifndef BRIDGE_RANGE
 #define BRIDGE_RANGE 0
 #endif
-/* CAN receive (pod). Default: polled from the main loop and while the radio
- * transmits. CAN_IRQ=1 (needs HW-184 INT wired to D6): the MCP2515 raises INT
- * for every received frame and the interrupt handler moves it into a
- * 64-frame ring (can_ring.h) at once, so a main-loop stall no longer
- * overflows the chip's 2 receive buffers; the main loop empties the ring. */
+/* CAN receive (pod). Default (needs HW-184 INT wired to D6): the MCP2515
+ * raises INT for every received frame and the interrupt handler moves it
+ * into a 64-frame ring (can_ring.h) at once, so a main-loop stall no longer
+ * overflows the chip's 2 receive buffers; the main loop empties the ring.
+ * CAN_IRQ=0 (make bridge ... CAN_IRQ=0): polled from the main loop and while
+ * the radio transmits, for a board without the INT wire. */
 #ifndef BRIDGE_CAN_IRQ
-#define BRIDGE_CAN_IRQ 0
+#define BRIDGE_CAN_IRQ 1
 #endif
 #define CAN_IRQ_ON (BRIDGE_CAN_IRQ && BRIDGE_ROLE == ROLE_POD && !BRIDGE_RANGE)
 #ifndef TX_DBM
@@ -571,7 +572,8 @@ int main(void)
     if (CAN_IRQ_ON && can_ok) {
         can_ring_init(&can_rx);
         board_can_irq_init(can_isr);
-        uart_puts("CAN receive: interrupt (MCP2515 INT on D6) + 64-frame ring\n");
+        uart_puts("CAN receive: interrupt (MCP2515 INT on D6) + 64-frame ring;\n"
+                  "  no CAN frames arriving? check the INT wire (selftest), or build CAN_IRQ=0\n");
     }
     if (!can_ok && !BRIDGE_RANGE) {
         uart_puts("CAN controller init failed, error ");

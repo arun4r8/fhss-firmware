@@ -81,10 +81,13 @@ ifeq ($(RANGE),1)
   BRIDGE_DEFS += -DBRIDGE_RANGE=1
   BRIDGE_NAME := bridge-range-$(ROLE)$(if $(filter 1,$(BW250)),-bw250)
 endif
-CAN_IRQ ?= 0
+# CAN receive: interrupt (MCP2515 INT on D6) by default; CAN_IRQ=0 polls,
+# for a board without the INT wire
+CAN_IRQ ?= 1
 ifeq ($(CAN_IRQ),1)
   BRIDGE_DEFS += -DBRIDGE_CAN_IRQ=1
-  BRIDGE_NAME := $(BRIDGE_NAME)-canirq
+else
+  BRIDGE_NAME := $(BRIDGE_NAME)-polled
 endif
 ifneq ($(TXDBM),)
   BRIDGE_DEFS += -DTX_DBM=$(TXDBM)
@@ -109,8 +112,8 @@ bridges:
 	$(MAKE) bridge ROLE=ground HUB=1
 	$(MAKE) bridge ROLE=pod DEMO=1 BW250=1
 	$(MAKE) bridge ROLE=ground BW250=1
-	$(MAKE) bridge ROLE=pod CAN_IRQ=1
-	$(MAKE) bridge ROLE=pod DEMO=1 CAN_IRQ=1
+	$(MAKE) bridge ROLE=pod CAN_IRQ=0
+	$(MAKE) bridge ROLE=pod DEMO=1 CAN_IRQ=0
 	$(MAKE) bridge ROLE=pod RANGE=1
 	$(MAKE) bridge ROLE=ground RANGE=1
 

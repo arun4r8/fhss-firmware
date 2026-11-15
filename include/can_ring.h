@@ -3,7 +3,7 @@
  *
  * The MCP2515 holds only 2 received frames. With the hubs sending about 160
  * frames/s, any main-loop stall longer than ~12 ms (a radio transaction, a
- * burst of console output) used to risk losing frames. With CAN_IRQ=1 the
+ * burst of console output) used to risk losing frames. In the pod build (default; CAN_IRQ=0 polls) the
  * MCP2515's INT pin fires an interrupt, the handler moves each frame into
  * this ring right away, and the main loop takes them out when it can.
  *

@@ -192,8 +192,9 @@ static void check_can(void)
     ok = ok && got && rx.id == tx.id && rx.dlc == 8 && memcmp(rx.data, tx.data, 8) == 0;
     check("CAN controller loopback (MCP2515)", ok);
 
-    /* INT (HW-184 INT -> D6 / PB10, CN10 pin 25) is only needed for CAN_IRQ=1
-     * builds, so an unwired pin is reported, not failed */
+    /* INT (HW-184 INT -> D6 / PB10, CN10 pin 25) is needed by the default pod
+     * build (the ground and CAN_IRQ=0 builds poll), so an unwired pin is
+     * reported, not failed */
     if (!ok) {
         return;
     }
@@ -202,8 +203,8 @@ static void check_can(void)
     } else if (int_went_low) {
         check("CAN INT pin (D6): low while a frame waits, released after reading", 1);
     } else {
-        uart_puts("  INFO  CAN INT not wired to D6 (CN10 pin 25): fine for polled builds,\n"
-                  "        needed for CAN_IRQ=1\n");
+        uart_puts("  INFO  CAN INT not wired to D6 (CN10 pin 25): the default pod build\n"
+                  "        needs it (receives no CAN without it); or build CAN_IRQ=0\n");
     }
 }
 
